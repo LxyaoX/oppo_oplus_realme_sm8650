@@ -77,7 +77,7 @@ on:
         type: boolean
         default: 'false'
       net_enhance:
-        description: '网络增强全家桶(BBRv3 源码补丁 + IPSet/Qdisc fq·fq_codel·cake/connmark/TTL/WireGuard/CIFS)'
+        description: '网络全家桶(BBRv3 源码补丁 + IPSet/Qdisc fq·fq_codel·cake/connmark/TTL/WireGuard/CIFS)'
         required: true
         type: boolean
         default: 'true'
@@ -520,7 +520,7 @@ jobs:
             fi
           fi
 
-      - name: 应用网络增强（BBRv3 / Qdisc / WireGuard / CIFS）
+      - name: 应用网络全家桶（BBRv3 / Qdisc / WireGuard / CIFS）
         if: inputs.net_enhance
         run: |
           # BBRv3 补丁 + IPSet/Qdisc/connmark/TTL/WireGuard/CIFS 配置都在脚本里。
@@ -805,7 +805,7 @@ jobs:
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
-          echo "Net enhance(BBRv3/Qdisc/CIFS): ${{ github.event.inputs.net_enhance }}" >> ./ak3.log
+          echo "网络全家桶: ${{ github.event.inputs.net_enhance }}" >> ./ak3.log
           echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
           echo "SSG: ${{ github.event.inputs.ssg_enable }}" >> ./ak3.log
@@ -893,7 +893,7 @@ jobs:
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
-          - 网络增强全家桶(BBRv3/Qdisc/WireGuard/CIFS)：${{ github.event.inputs.net_enhance }}
+          - 网络全家桶(BBRv3/Qdisc/WireGuard/CIFS)：${{ github.event.inputs.net_enhance }}
           - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
           - 三星SSG IO调度器支持：${{ github.event.inputs.ssg_enable }}

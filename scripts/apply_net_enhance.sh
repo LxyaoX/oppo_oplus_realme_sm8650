@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 网络增强：BBRv3 源码补丁 + IPSet / Qdisc / Conntrack / TTL / WireGuard / CIFS 配置。
+# 网络全家桶：BBRv3 源码补丁 + IPSet / Qdisc / Conntrack / TTL / WireGuard / CIFS 配置。
 #
 # 用法: apply_net_enhance.sh <kernel_workspace> <kmi> [default_cc]
 #   <kernel_workspace>  含 common/ 的那一层
@@ -35,7 +35,7 @@ fi
 
 # ---------- 1) BBRv3 补丁 ----------
 if [ "$SKIP_BBR" = "1" ]; then
-  echo "default_cc=none：跳过 BBRv3 补丁与拥塞控制配置（其余网络增强照常）"
+  echo "default_cc=none：跳过 BBRv3 补丁与拥塞控制配置（其余网络全家桶照常）"
 elif [ -f "$PATCH_FILE" ]; then
   cd ./common
   if grep -q '^config TCP_CONG_BBR3' net/ipv4/Kconfig && [ -f net/ipv4/tcp_bbr3.c ]; then
@@ -162,16 +162,16 @@ grep -qx 'CONFIG_IP_SET_MAX=65534' "$DEFCONFIG" || { echo "ERROR: CONFIG_IP_SET_
 [ "$fail" = "0" ] || exit 1
 
 if [ "$SKIP_BBR" = "1" ]; then
-  echo "网络增强完成：BBR 系列按 bbr_enable=false 跳过，IPSet/Qdisc/WireGuard/CIFS 已启用"
+  echo "网络全家桶完成：BBR 系列按 bbr_enable=false 跳过，IPSet/Qdisc/WireGuard/CIFS 已启用"
 elif [ "$BBR3_OK" = "1" ] && [ "$DEF_CC" = "bbr3" ]; then
   grep -qx 'CONFIG_TCP_CONG_BBR3=y' "$DEFCONFIG" || { echo "ERROR: CONFIG_TCP_CONG_BBR3 未落盘" >&2; exit 1; }
   grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr3"' "$DEFCONFIG" || { echo "ERROR: 默认拥塞控制不是 bbr3" >&2; exit 1; }
-  echo "网络增强完成：BBRv3 可用，默认 $EFFECTIVE_CC"
+  echo "网络全家桶完成：BBRv3 可用，默认 $EFFECTIVE_CC"
 else
   if [ "$BBR3_OK" = "1" ]; then
-    echo "网络增强完成：BBRv3 已应用，默认 $EFFECTIVE_CC"
+    echo "网络全家桶完成：BBRv3 已应用，默认 $EFFECTIVE_CC"
   else
-    echo "网络增强完成：BBRv3 未应用（补丁跳过），默认 $EFFECTIVE_CC"
+    echo "网络全家桶完成：BBRv3 未应用（补丁跳过），默认 $EFFECTIVE_CC"
   fi
 fi
 
@@ -179,11 +179,11 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo ""
     if [ "$SKIP_BBR" = "1" ]; then
-      echo "> ✅ **网络增强**：IPSet + Qdisc(fq/fq_codel/cake) + connmark + TTL + WireGuard + CIFS（BBR 按开关跳过）"
+      echo "> ✅ **网络全家桶**：IPSet + Qdisc(fq/fq_codel/cake) + connmark + TTL + WireGuard + CIFS（BBR 按开关跳过）"
     elif [ "$BBR3_OK" = "1" ]; then
-      echo "> ✅ **网络增强**：BBRv3 + IPSet + Qdisc(fq/fq_codel/cake) + connmark + TTL + WireGuard + CIFS"
+      echo "> ✅ **网络全家桶**：BBRv3 + IPSet + Qdisc(fq/fq_codel/cake) + connmark + TTL + WireGuard + CIFS"
     else
-      echo "> ⚠️ **网络增强**：BBRv3 补丁未应用（降级 BBR v1），其余 IPSet/Qdisc/WireGuard/CIFS 已启用"
+      echo "> ⚠️ **网络全家桶**：BBRv3 补丁未应用（降级 BBR v1），其余 IPSet/Qdisc/WireGuard/CIFS 已启用"
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi

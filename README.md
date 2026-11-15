@@ -36,7 +36,7 @@
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] FinaSU SUSFS Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE`，内核树直调入口替代 tracepoint/dispatcher/kprobe）
 - [x] SUSFS 隐藏增强（`/proc/susfs_hide_modules` 模块名、`/proc/susfs_hide_mounts` 挂载前缀）
-- [x] 网络增强全家桶（BBRv3 升级 + IPSet / Qdisc / WireGuard / CIFS，从 AnyKernel3 移植）
+- [x] 网络全家桶（BBRv3 升级 + IPSet / Qdisc / WireGuard / CIFS，从 AnyKernel3 移植）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 维护
@@ -102,7 +102,7 @@ cat /proc/susfs_hide_mounts
 而 `libksud.so` 随管理器 APK 分发、不在内核构建范围内。内核侧提供 `/proc` 节点后功能本身可用，
 命令行/模块脚本直接写即可。反过来把内核伪装成 lkm 会连累 `full_clone`、`avc_spoof` 和整个页面变只读，不做。
 
-## 网络增强全家桶（BBRv3 / Qdisc / WireGuard / CIFS）
+## 网络全家桶（BBRv3 / Qdisc / WireGuard / CIFS）
 从 AnyKernel3 移植。开关是工作流的 `net_enhance`（默认 true），本地 builder 问 `NET_ENHANCE`。
 
 | 块 | 内容 | 来源 |

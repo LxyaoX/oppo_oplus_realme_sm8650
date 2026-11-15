@@ -27,7 +27,7 @@ read -p "是否启用网络功能增强优化配置？(y/n，默认：y): " APPL
 APPLY_BETTERNET=${APPLY_BETTERNET:-y}
 read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
-read -p "是否应用网络增强全家桶(BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS)？(y/n，默认：y): " NET_ENHANCE
+read -p "是否应用网络全家桶(BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS)？(y/n，默认：y): " NET_ENHANCE
 NET_ENHANCE=${NET_ENHANCE:-y}
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
@@ -68,7 +68,7 @@ echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
 echo "应用 BBR 等算法: $APPLY_BBR"
-echo "网络增强全家桶: $NET_ENHANCE"
+echo "网络全家桶: $NET_ENHANCE"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用ReKernel-X: $APPLY_REKERNEL"
@@ -349,7 +349,7 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   fi
 fi
 
-# ===== 网络增强：BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS =====
+# ===== 网络全家桶：BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS =====
 if [[ "$NET_ENHANCE" == [yY] ]]; then
   case "$APPLY_BBR" in
     [nN]) NET_CC=none ;;
