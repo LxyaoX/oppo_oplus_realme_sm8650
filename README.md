@@ -36,6 +36,22 @@
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
+## 维护
+工作流是按版本参数生成的，**不要手改 `.github/workflows/fastbuild_6.1.*.yml`**（7 份只差版本号/源码包/机型，手改必漂移）：
+
+```bash
+# 改版本参数（源码包、机型、BPF 开关）或改公共步骤，都只动这两处：
+#   data/builds.json            每版本参数
+#   templates/fastbuild.yml.in  公共步骤（全部 7 个版本共用）
+python3 scripts/sync_workflows.py            # 重新生成
+python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移退出码 1
+
+# 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
+```
+
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_finasu.sh`、`security_patch/`），
+CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
+
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
 - [ ] Nethunter 网卡监听模式支持

@@ -1,0 +1,65 @@
+[
+  {
+    "sub": "57",
+    "name": "6.1.57 欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_common_oneplus_sm8650/archive/refs/heads/oneplus/sm8650_u_14.0.0_oneplus12.zip",
+    "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_u_14.0.0_oneplus12",
+    "device": "SM8650",
+    "base_model": "一加12",
+    "bpf_stream_parser": true
+  },
+  {
+    "sub": "75",
+    "name": "6.1.75 欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_common_oneplus_sm8650/archive/refs/heads/oneplus/sm8650_v_15.0.0_oneplus12.zip",
+    "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_v_15.0.0_oneplus12",
+    "device": "SM8650",
+    "base_model": "一加12",
+    "bpf_stream_parser": true
+  },
+  {
+    "sub": "115",
+    "name": "6.1.115 (天玑特供)欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_oneplus_mt6989/archive/refs/heads/oneplus/mt6989_v_15.0.2_ace5_race.zip",
+    "src_dir": "android_kernel_oneplus_mt6989-oneplus-mt6989_v_15.0.2_ace5_race",
+    "device": "MT6989",
+    "base_model": "一加Ace5竞速版",
+    "bpf_stream_parser": false
+  },
+  {
+    "sub": "118",
+    "name": "6.1.118 欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_common_oneplus_sm8650/archive/refs/heads/oneplus/sm8650_b_16.0.0_oneplus12.zip",
+    "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_b_16.0.0_oneplus12",
+    "device": "SM8650",
+    "base_model": "一加12",
+    "bpf_stream_parser": true
+  },
+  {
+    "sub": "128",
+    "name": "6.1.128 (天玑特供)欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_oneplus_mt6897/archive/refs/heads/oneplus/mt6897_v_15.0.0_oneplus_pad.zip",
+    "src_dir": "android_kernel_oneplus_mt6897-oneplus-mt6897_v_15.0.0_oneplus_pad",
+    "device": "MT6897",
+    "base_model": "一加平板",
+    "bpf_stream_parser": false
+  },
+  {
+    "sub": "134",
+    "name": "6.1.134 (天玑特供)欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_oneplus_mt6989/archive/refs/heads/oneplus/mt6989_b_16.0.0_ace5_race.zip",
+    "src_dir": "android_kernel_oneplus_mt6989-oneplus-mt6989_b_16.0.0_ace5_race",
+    "device": "MT6989",
+    "base_model": "一加Ace5竞速板",
+    "bpf_stream_parser": false
+  },
+  {
+    "sub": "141",
+    "name": "6.1.141 欧加真OKI内核快速构建",
+    "src_zip": "https://github.com/cctv18/android_kernel_common_oneplus_sm8650/archive/refs/heads/oneplus/sm8650_b_16.0.0_oneplus12_6.1.141.zip",
+    "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_b_16.0.0_oneplus12_6.1.141",
+    "device": "SM8650",
+    "base_model": "一加12",
+    "bpf_stream_parser": true
+  }
+]
