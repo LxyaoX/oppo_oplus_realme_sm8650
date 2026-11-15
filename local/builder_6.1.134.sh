@@ -15,7 +15,7 @@ read -p "是否启用susfs？(y/n，默认：y): " APPLY_SUSFS
 APPLY_SUSFS=${APPLY_SUSFS:-y}
 read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，默认：n): " USE_PATCH_LINUX
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
-read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
+read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, f=FinaSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
@@ -44,6 +44,8 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
   KSU_TYPE="KernelSU Next"
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   KSU_TYPE="KernelSU"
+elif [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+  KSU_TYPE="FinaSU"
 else
   KSU_TYPE="no KSU"
 fi
@@ -137,6 +139,71 @@ elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   cd ./KernelSU
   KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/tiann/KernelSU/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
   sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+elif [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+  echo ">>> 拉取 FinaSU 并设置版本..."
+  # 全量 clone：Kbuild 用 rev-list --count HEAD 算版本号，浅仓库会算成 30001
+  git clone https://github.com/LyraVoid/FinaSU.git KernelSU
+  # in-tree 集成：驱动目录软链 + Makefile/Kconfig 挂载
+  DRIVER_DIR="./common/drivers"
+  ln -sfn "$(realpath --relative-to="$DRIVER_DIR" "$PWD/KernelSU/kernel")" "$DRIVER_DIR/kernelsu"
+  grep -q "obj-.*CONFIG_KSU.*kernelsu/" "$DRIVER_DIR/Makefile" || \
+    echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_DIR/Makefile"
+  grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig" || \
+    sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
+  KSU_VERSION=$(expr $(git -C KernelSU rev-list --count HEAD) + 30000)
+  echo ">>> FinaSU 版本: $KSU_VERSION"
+
+  # 管理器证书：默认信任槽是上游 KernelSU 官方签名，FinaSU 管理器需第二信任槽
+  FINASU_SCRIPT_DIR="$SCRIPT_DIR/../scripts"
+  if [ ! -f "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py" ]; then
+    FINASU_SCRIPT_DIR="$WORKDIR/.finasu_scripts"
+    mkdir -p "$FINASU_SCRIPT_DIR/finasu_compat"
+    curl -fsSL "https://github.com/${CVE_PATCH_REPO:-LxyaoX/oppo_oplus_realme_sm8650}/raw/refs/heads/main/scripts/finasu_compat/extract_manager_cert.py" \
+      -o "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py"
+    curl -fsSL "https://github.com/${CVE_PATCH_REPO:-LxyaoX/oppo_oplus_realme_sm8650}/raw/refs/heads/main/scripts/ksu_post_setup.sh" \
+      -o "$FINASU_SCRIPT_DIR/ksu_post_setup.sh"
+  fi
+  if [ -n "${FINASU_CERT:-}" ]; then
+    KSU_CERT_SIZE=$(echo "$FINASU_CERT" | awk '{print $1}')
+    KSU_CERT_HASH=$(echo "$FINASU_CERT" | awk '{print $2}')
+  else
+    echo ">>> 未指定 FINASU_CERT，从 FinaSU 最新 Release APK 提取管理器证书..."
+    FINASU_TMP=$(mktemp -d)
+    REL_URL=$(curl -s --fail --max-time 60 "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest" \
+      | python3 -c "import json,sys;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))" 2>/dev/null || true)
+    if [ -z "$REL_URL" ]; then
+      echo "[ERROR] 无法获取 FinaSU 最新 Release APK，可设置 FINASU_CERT=\"0xXXXX <sha256>\" 后重跑" >&2
+      exit 1
+    fi
+    curl -sL --fail --retry 3 --max-time 600 -o "$FINASU_TMP/manager.apk" "$REL_URL"
+    CERT_INFO=$(python3 "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py" "$FINASU_TMP/manager.apk" | head -n1)
+    KSU_CERT_SIZE=$(printf '%s' "$CERT_INFO" | awk '{print $1}')
+    KSU_CERT_HASH=$(printf '%s' "$CERT_INFO" | awk '{print $2}')
+  fi
+  if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
+    echo "[ERROR] FinaSU 管理器证书未获取到（FINASU_CERT 格式应为 \"0xXXXX <sha256>\"）" >&2
+    exit 1
+  fi
+  echo ">>> 注入 FinaSU 管理器证书到第二信任槽: size=$KSU_CERT_SIZE sha256=$KSU_CERT_HASH"
+  awk -v size="$KSU_CERT_SIZE" -v hash="$KSU_CERT_HASH" '
+    !done && /^ccflags-y \+= -DEXPECTED_HASH=/ {
+      print
+      print "# injected by builder: trust the official FinaSU manager via the second signature slot"
+      print "KSU_EXPECTED_SIZE2 := " size
+      print "KSU_EXPECTED_HASH2 := " hash
+      print "KSU_SECOND_SIGNATURE_RELEASE := 1"
+      done = 1
+      next
+    }
+    { print }
+  ' KernelSU/kernel/Kbuild > KernelSU/kernel/Kbuild.new && mv KernelSU/kernel/Kbuild.new KernelSU/kernel/Kbuild
+  grep -q "^KSU_EXPECTED_SIZE2 := " KernelSU/kernel/Kbuild && \
+    grep -q "^KSU_EXPECTED_HASH2 := " KernelSU/kernel/Kbuild && \
+    grep -q "^KSU_SECOND_SIGNATURE_RELEASE := 1" KernelSU/kernel/Kbuild || {
+      echo "[ERROR] Kbuild 证书注入失败（锚点缺失，FinaSU Kbuild 结构可能已变化）" >&2
+      exit 1
+    }
+  bash "$FINASU_SCRIPT_DIR/ksu_post_setup.sh" KernelSU finasu
 else
   echo "已选择无内置KernelSU模式，跳过配置..."
 fi

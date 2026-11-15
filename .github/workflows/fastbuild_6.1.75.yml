@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认BakaSU)'
+        description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/FinaSU/KSU(原版)/无内置KSU,默认BakaSU)'
         required: true
         type: choice
         default: 'bakasu'
@@ -20,8 +20,14 @@ on:
           - 'bakasu'
           - 'sukisu'
           - 'ksunext'
+          - 'finasu'
           - 'ksu'
           - 'none'
+      finasu_cert:
+        description: 'FinaSU 专用：管理器签名证书 "0xXXXX <sha256>"（留空则从 FinaSU 最新 Release APK 现场提取）'
+        required: false
+        type: string
+        default: ''
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -288,6 +294,78 @@ jobs:
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
             sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+          elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            echo "正在配置 FinaSU..."
+            # FinaSU 的 kernel/setup.sh 会自己 clone/checkout，这里按上游 in-tree 集成方式手动完成
+            # 全量 clone 而非 --depth 1：Kbuild 用 rev-list --count HEAD 算版本号，浅仓库会算成 30001
+            git clone https://github.com/LyraVoid/FinaSU.git KernelSU
+            DRIVER_DIR="./common/drivers"
+            ln -sfn "$(realpath --relative-to="$DRIVER_DIR" "$PWD/KernelSU/kernel")" "$DRIVER_DIR/kernelsu"
+            grep -q "obj-.*CONFIG_KSU.*kernelsu/" "$DRIVER_DIR/Makefile" || \
+              echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_DIR/Makefile"
+            grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig" || \
+              sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
+
+            # 与 FinaSU Kbuild 同源的版本号：30000 + git 提交数
+            KSU_VERSION=$(expr $(git -C KernelSU rev-list --count HEAD) + 30000)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+
+            # FinaSU Kbuild 的默认信任槽是上游 KernelSU 官方管理器签名（0x033b/c371061b…），
+            # 官方 FinaSU 管理器走第二信任槽（EXPECTED_SIZE2/HASH2）；不注入时
+            # 内核只认 KernelSU 官方管理器，FinaSU 管理器显示“未安装”。
+            FINASU_TMP=$(mktemp -d)
+            FINASU_CERT="${{ github.event.inputs.finasu_cert }}"
+            if [ -n "$FINASU_CERT" ]; then
+              KSU_CERT_SIZE=$(echo "$FINASU_CERT" | awk '{print $1}')
+              KSU_CERT_HASH=$(echo "$FINASU_CERT" | awk '{print $2}')
+            else
+              echo "未指定 finasu_cert，从 FinaSU 最新 Release APK 提取管理器证书..."
+              curl -fsSL "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/finasu_compat/extract_manager_cert.py" \
+                -o "$FINASU_TMP/extract_manager_cert.py"
+              REL_URL=$(curl -s --fail --max-time 60 "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest" \
+                | python3 -c "import json,sys;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))" 2>/dev/null || true)
+              if [ -z "$REL_URL" ]; then
+                echo "::error::无法获取 FinaSU 最新 Release 的 APK 资产，可用 finasu_cert 输入手动指定证书"
+                exit 1
+              fi
+              curl -sL --fail --retry 3 --max-time 600 -o "$FINASU_TMP/manager.apk" "$REL_URL" || {
+                echo "::error::下载 FinaSU Release APK 失败"
+                exit 1
+              }
+              CERT_INFO=$(python3 "$FINASU_TMP/extract_manager_cert.py" "$FINASU_TMP/manager.apk" | head -n1)
+              KSU_CERT_SIZE=$(printf '%s' "$CERT_INFO" | awk '{print $1}')
+              KSU_CERT_HASH=$(printf '%s' "$CERT_INFO" | awk '{print $2}')
+            fi
+            if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
+              echo "::error::FinaSU 管理器证书未获取到（finasu_cert 格式应为 \"0xXXXX <sha256>\"）"
+              exit 1
+            fi
+            echo "注入 FinaSU 管理器证书到第二信任槽: size=$KSU_CERT_SIZE sha256=$KSU_CERT_HASH"
+            awk -v size="$KSU_CERT_SIZE" -v hash="$KSU_CERT_HASH" '
+              !done && /^ccflags-y \+= -DEXPECTED_HASH=/ {
+                print
+                print "# injected by CI: trust the official FinaSU manager via the second signature slot"
+                print "KSU_EXPECTED_SIZE2 := " size
+                print "KSU_EXPECTED_HASH2 := " hash
+                print "KSU_SECOND_SIGNATURE_RELEASE := 1"
+                done = 1
+                next
+              }
+              { print }
+            ' KernelSU/kernel/Kbuild > KernelSU/kernel/Kbuild.new && mv KernelSU/kernel/Kbuild.new KernelSU/kernel/Kbuild
+            grep -q "^KSU_EXPECTED_SIZE2 := " KernelSU/kernel/Kbuild && \
+              grep -q "^KSU_EXPECTED_HASH2 := " KernelSU/kernel/Kbuild && \
+              grep -q "^KSU_SECOND_SIGNATURE_RELEASE := 1" KernelSU/kernel/Kbuild || {
+                echo "::error::Kbuild 证书注入失败（锚点 ccflags-y += -DEXPECTED_HASH= 缺失，FinaSU Kbuild 结构可能已变化）"
+                exit 1
+              }
+
+            # 管理器里“内核完整版本”的 @<branch> 固定成品牌名（CI 检出后是 master，
+            # 与 SukiSU/BakaSU 的 @LingLuo 展示保持一致）；必须在上面的 awk 改写之后调用
+            curl -fsSL "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/ksu_post_setup.sh" \
+              -o "$FINASU_TMP/ksu_post_setup.sh"
+            bash "$FINASU_TMP/ksu_post_setup.sh" KernelSU finasu
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -766,6 +844,8 @@ jobs:
             KSU_TYPENAME="BakaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             KSU_TYPENAME="KSUNext"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
             KSU_TYPENAME="KSU"
           else
@@ -866,6 +946,8 @@ jobs:
             KSU_TYPENAME="BakaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             KSU_TYPENAME="KernelSU Next"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
             KSU_TYPENAME="KernelSU (Official)"
           else
@@ -898,6 +980,7 @@ jobs:
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
           - KSU原版管理器下载：[KernelSU](https://github.com/tiann/KernelSU/releases)
+          - FinaSU管理器下载：[FinaSU](https://github.com/LyraVoid/FinaSU/releases)
           
           ### ⏫️ 更新内容：
           - 更新${{ env.KSU_TYPENAME }}至最新版本（${{ needs.build.outputs.ksuver }}）
