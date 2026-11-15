@@ -141,69 +141,7 @@ elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
 elif [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
   echo ">>> 拉取 FinaSU 并设置版本..."
-  # 全量 clone：Kbuild 用 rev-list --count HEAD 算版本号，浅仓库会算成 30001
-  git clone https://github.com/LyraVoid/FinaSU.git KernelSU
-  # in-tree 集成：驱动目录软链 + Makefile/Kconfig 挂载
-  DRIVER_DIR="./common/drivers"
-  ln -sfn "$(realpath --relative-to="$DRIVER_DIR" "$PWD/KernelSU/kernel")" "$DRIVER_DIR/kernelsu"
-  grep -q "obj-.*CONFIG_KSU.*kernelsu/" "$DRIVER_DIR/Makefile" || \
-    echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_DIR/Makefile"
-  grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig" || \
-    sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
-  KSU_VERSION=$(expr $(git -C KernelSU rev-list --count HEAD) + 30000)
-  echo ">>> FinaSU 版本: $KSU_VERSION"
-
-  # 管理器证书：默认信任槽是上游 KernelSU 官方签名，FinaSU 管理器需第二信任槽
-  FINASU_SCRIPT_DIR="$SCRIPT_DIR/../scripts"
-  if [ ! -f "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py" ]; then
-    FINASU_SCRIPT_DIR="$WORKDIR/.finasu_scripts"
-    mkdir -p "$FINASU_SCRIPT_DIR/finasu_compat"
-    curl -fsSL "https://github.com/${CVE_PATCH_REPO:-LxyaoX/oppo_oplus_realme_sm8650}/raw/refs/heads/main/scripts/finasu_compat/extract_manager_cert.py" \
-      -o "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py"
-    curl -fsSL "https://github.com/${CVE_PATCH_REPO:-LxyaoX/oppo_oplus_realme_sm8650}/raw/refs/heads/main/scripts/ksu_post_setup.sh" \
-      -o "$FINASU_SCRIPT_DIR/ksu_post_setup.sh"
-  fi
-  if [ -n "${FINASU_CERT:-}" ]; then
-    KSU_CERT_SIZE=$(echo "$FINASU_CERT" | awk '{print $1}')
-    KSU_CERT_HASH=$(echo "$FINASU_CERT" | awk '{print $2}')
-  else
-    echo ">>> 未指定 FINASU_CERT，从 FinaSU 最新 Release APK 提取管理器证书..."
-    FINASU_TMP=$(mktemp -d)
-    REL_URL=$(curl -s --fail --max-time 60 "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest" \
-      | python3 -c "import json,sys;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))" 2>/dev/null || true)
-    if [ -z "$REL_URL" ]; then
-      echo "[ERROR] 无法获取 FinaSU 最新 Release APK，可设置 FINASU_CERT=\"0xXXXX <sha256>\" 后重跑" >&2
-      exit 1
-    fi
-    curl -sL --fail --retry 3 --max-time 600 -o "$FINASU_TMP/manager.apk" "$REL_URL"
-    CERT_INFO=$(python3 "$FINASU_SCRIPT_DIR/finasu_compat/extract_manager_cert.py" "$FINASU_TMP/manager.apk" | head -n1)
-    KSU_CERT_SIZE=$(printf '%s' "$CERT_INFO" | awk '{print $1}')
-    KSU_CERT_HASH=$(printf '%s' "$CERT_INFO" | awk '{print $2}')
-  fi
-  if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
-    echo "[ERROR] FinaSU 管理器证书未获取到（FINASU_CERT 格式应为 \"0xXXXX <sha256>\"）" >&2
-    exit 1
-  fi
-  echo ">>> 注入 FinaSU 管理器证书到第二信任槽: size=$KSU_CERT_SIZE sha256=$KSU_CERT_HASH"
-  awk -v size="$KSU_CERT_SIZE" -v hash="$KSU_CERT_HASH" '
-    !done && /^ccflags-y \+= -DEXPECTED_HASH=/ {
-      print
-      print "# injected by builder: trust the official FinaSU manager via the second signature slot"
-      print "KSU_EXPECTED_SIZE2 := " size
-      print "KSU_EXPECTED_HASH2 := " hash
-      print "KSU_SECOND_SIGNATURE_RELEASE := 1"
-      done = 1
-      next
-    }
-    { print }
-  ' KernelSU/kernel/Kbuild > KernelSU/kernel/Kbuild.new && mv KernelSU/kernel/Kbuild.new KernelSU/kernel/Kbuild
-  grep -q "^KSU_EXPECTED_SIZE2 := " KernelSU/kernel/Kbuild && \
-    grep -q "^KSU_EXPECTED_HASH2 := " KernelSU/kernel/Kbuild && \
-    grep -q "^KSU_SECOND_SIGNATURE_RELEASE := 1" KernelSU/kernel/Kbuild || {
-      echo "[ERROR] Kbuild 证书注入失败（锚点缺失，FinaSU Kbuild 结构可能已变化）" >&2
-      exit 1
-    }
-  bash "$FINASU_SCRIPT_DIR/ksu_post_setup.sh" KernelSU finasu
+  bash "$SCRIPT_DIR/../scripts/apply_finasu.sh" "." "${FINASU_CERT:-}"
 else
   echo "已选择无内置KernelSU模式，跳过配置..."
 fi
@@ -213,66 +151,22 @@ cd "$WORKDIR/kernel_workspace"
 echo ">>> 应用 SUSFS&hook 补丁..."
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo ">>> 克隆补丁仓库..."
-  SUSFS_KMI="android14-6.1"
+  # 代次选择 / OKI hunk 兜底 / 落盘自检都在脚本里，与 CI 共用同一份
   if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
-    # FinaSU 锁 SUSFS 2.4.0（ec03d0c）：新代次补丁走 susfs_add_sus_type / fake_status；
-    # cctv18/susfs4oki 的 oki-* 是旧代次（extern struct selinux_state fake_state），
-    # 和 FinaSU 驱动对不上，链接会报 undefined symbol: fake_state
-    SUSFS_REPO="ShirkNeko/susfs4ksu"
-    SUSFS_BRANCH="gki-$SUSFS_KMI"
+    KSU_APPLY_TYPE="finasu"
+  elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
+    KSU_APPLY_TYPE="ksu"
+  elif [[ "$KSU_BRANCH" == "l" || "$KSU_BRANCH" == "L" ]]; then
+    KSU_APPLY_TYPE="none"
   else
-    SUSFS_REPO="cctv18/susfs4oki"
-    SUSFS_BRANCH="oki-$SUSFS_KMI"
+    KSU_APPLY_TYPE="bakasu"
   fi
-  git clone --depth=1 "https://github.com/$SUSFS_REPO.git" susfs4ksu -b "$SUSFS_BRANCH"
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
-  cp "./susfs4ksu/kernel_patches/50_add_susfs_in_gki-$SUSFS_KMI.patch" ./common/
-  cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
-  cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-  cd ./common
-  patch -p1 -F 3 < "50_add_susfs_in_gki-$SUSFS_KMI.patch" || true
-  patch -p1 -F 3 < 69_hide_stuff.patch || true
-  if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
-    # OKI 树 include 区与 GKI 不同，两个 hunk 靠 -F3 也可能落不下来，逐个补
-    grep -q 'susfs_def.h' fs/proc/base.c || \
-      sed -i '/^#include <trace\/events\/oom.h>/i #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/base.c
-    if ! grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c; then
-      awk '
-        !done && /^\/\* Maximum number of mounts in a mount namespace \*\// {
-          print "#ifdef CONFIG_KSU_SUSFS"
-          print "#include <linux/susfs_def.h>"
-          print "#endif"
-          print ""
-          print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
-          print "extern bool susfs_is_current_ksu_domain(void);"
-          print "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;"
-          print ""
-          print "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */"
-          print "#endif"
-          print ""
-          done = 1
-        }
-        { print }
-      ' fs/namespace.c > fs/namespace.c.tmp && mv fs/namespace.c.tmp fs/namespace.c
-    fi
-    for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-      [ -f "$f" ] || { echo "[ERROR] SUSFS 新代次补丁未落盘: $f 缺失" >&2; exit 1; }
-    done
-    # namespace.c 的 hunk 已由 awk 兜底替代，rej 不留
-    rm -f fs/namespace.c.rej 2>/dev/null || true
-    grep -q 'susfs_add_sus_type' fs/susfs.c || { echo "[ERROR] fs/susfs.c 缺 susfs_add_sus_type" >&2; exit 1; }
-    grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c || { echo "[ERROR] fs/namespace.c 缺 CL_COPY_MNT_NS" >&2; exit 1; }
-    echo ">>> FinaSU: SUSFS 新代次补丁集应用完成（$SUSFS_REPO@$(git -C ../susfs4ksu rev-parse --short HEAD)）"
-  fi
+  bash "$SCRIPT_DIR/../scripts/apply_susfs.sh" "$WORKDIR/kernel_workspace" android14-6.1 "$KSU_APPLY_TYPE" \
+    "https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/69_hide_stuff.patch"
 else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
 cd "$WORKDIR/kernel_workspace"
-if [[ "$KSU_BRANCH" == [kK] && "$APPLY_SUSFS" == [yY] ]]; then
-  cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-  cd ./KernelSU
-  patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
-fi
 cd "$WORKDIR/kernel_workspace"
 
 # ===== 应用 LZ4 & ZSTD 补丁 =====
@@ -494,72 +388,7 @@ fi
 
 # ===== 启用 ReKernel-X =====
 if [[ "$APPLY_REKERNEL" == "y" || "$APPLY_REKERNEL" == "Y" ]]; then
-  echo ">>> 正在集成 ReKernel-X..."
-  cd "$WORKDIR/kernel_workspace"
-  RKX_SRC="$WORKDIR/kernel_workspace/.rkx_src"
-  rm -rf "$RKX_SRC"
-  git clone --depth 1 https://github.com/myflavor/ReKernel-X.git "$RKX_SRC"
-  RKX_COMMIT=$(git -C "$RKX_SRC" rev-parse --short HEAD)
-  echo ">>> ReKernel-X upstream commit: $RKX_COMMIT"
-
-  # 上游是外置 LKM 包（LKM-Source/），整包搬进官方驱动树
-  RKX_DIR=./common/drivers/rekernel_x
-  rm -rf "$RKX_DIR"
-  mkdir -p "$RKX_DIR"
-  cp -a "$RKX_SRC/LKM-Source/." "$RKX_DIR/"
-
-  # 上游没有 Kconfig（外置模块靠 obj-m 编译），in-tree 编译必须自建
-  {
-    echo 'config REKERNEL_X'
-    echo '	bool "ReKernel-X: binder / signal / network runtime hooks"'
-    echo '	default n'
-    echo '	help'
-    echo '	  ReKernel-X 内核侧运行时钩子：Binder 事务与异步缓存清理、信号投递、'
-    echo '	  网络回流事件，经 Generic Netlink 上报用户态模块。'
-    echo ''
-    echo 'config REKERNEL_X_DEBUG'
-    echo '	bool "ReKernel-X debug logging"'
-    echo '	depends on REKERNEL_X'
-    echo '	default n'
-    echo '	help'
-    echo '	  打开 rkx_log_debug（正式包不要开，会持续打印）。'
-  } > "$RKX_DIR/Kconfig"
-
-  # 外置模块 Makefile -> in-tree 规则；上游版本号写进 ccflags
-  {
-    echo '# ReKernel-X in-tree build rules (generated by builder script)'
-    echo 'obj-$(CONFIG_REKERNEL_X) += rekernel_x.o'
-    echo ''
-    echo 'rekernel_x-y := rkx.o rkx_genl.o rkx_netuid.o rkx_free_async.o rkx_frozen.o \'
-    echo '                rkx_binder.o rkx_signal.o rkx_netfilter.o rkx_binder_kp.o rkx_binder_alloc.o'
-    echo ''
-    printf 'ccflags-y += -DRKX_VERSION=\\"%s\\"\n' "$RKX_COMMIT"
-    echo 'ccflags-$(CONFIG_REKERNEL_X_DEBUG) += -DRKX_DEBUG'
-  } > "$RKX_DIR/Makefile"
-
-  # 清掉厂商树里预置的 Re-Kernel，避免两套 binder 钩子并存
-  rm -rf ./common/drivers/rekernel
-  sed -i '/^#Re-Kernel Support$/d' ./common/drivers/Makefile
-  sed -i 's|^obj-$(CONFIG_REKERNEL)[[:space:]]*+= rekernel/|obj-$(CONFIG_REKERNEL_X) += rekernel_x/|' ./common/drivers/Makefile
-  sed -i 's|^source "drivers/rekernel/Kconfig"$|source "drivers/rekernel_x/Kconfig"|' ./common/drivers/Kconfig
-  sed -i '/^CONFIG_REKERNEL=y$/d' "$DEFCONFIG_FILE"
-
-  # 驱动树结构与预期不符时补挂一次（幂等）
-  grep -qF 'source "drivers/rekernel_x/Kconfig"' ./common/drivers/Kconfig || \
-    sed -i '/^endmenu$/i source "drivers/rekernel_x/Kconfig"' ./common/drivers/Kconfig
-  grep -qF 'obj-$(CONFIG_REKERNEL_X) += rekernel_x/' ./common/drivers/Makefile || \
-    echo 'obj-$(CONFIG_REKERNEL_X) += rekernel_x/' >> ./common/drivers/Makefile
-
-  # 老树 binder_internal.h 里用了 DEFINE_SHOW_ATTRIBUTE，需要先引入 seq_file.h（幂等）
-  for RKX_F in rkx_binder.c rkx_binder_kp.c rkx_binder_alloc.h; do
-    grep -qF '#include <linux/seq_file.h>' "$RKX_DIR/$RKX_F" && continue
-    sed -i '/#include "\.\.\/android\/binder_internal\.h"/i #include <linux/seq_file.h>' "$RKX_DIR/$RKX_F"
-  done
-
-  grep -q '^CONFIG_REKERNEL_X=y$' "$DEFCONFIG_FILE" || echo "CONFIG_REKERNEL_X=y" >> "$DEFCONFIG_FILE"
-
-  rm -rf "$RKX_SRC"
-  echo ">>> ReKernel-X 集成完成（upstream $RKX_COMMIT）"
+  bash "$SCRIPT_DIR/../scripts/apply_rekernel_x.sh" "$WORKDIR/kernel_workspace"
 fi
 # ===== 启用内核级基带保护 =====
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then

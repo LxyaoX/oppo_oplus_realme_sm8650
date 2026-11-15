@@ -227,7 +227,7 @@ jobs:
           else
             echo "旧缓存不存在或已被清理！"
           fi
-      
+
       - name: 初始化并配置ccache
         run: |
           # 设置ccache环境变量
@@ -255,6 +255,23 @@ jobs:
             echo "ccache缓存命中详情:"
             ccache -sv
           fi
+
+      - name: 准备集成脚本
+        run: |
+          set -e
+          # 本工作流不做 checkout，一次把仓库 tarball 落到 RUNNER_TEMP，
+          # 后面的 ReKernel-X / SUSFS / FinaSU / CVE 都从这份拷贝里取脚本，不再各自下载
+          CI_ROOT="$RUNNER_TEMP/ci-repo"
+          rm -rf "$CI_ROOT"
+          mkdir -p "$CI_ROOT"
+          curl -sSL "https://codeload.github.com/$GITHUB_REPOSITORY/tar.gz/refs/heads/$GITHUB_REF_NAME" -o "$RUNNER_TEMP/ci-repo.tar.gz"
+          tar --force-local -xzf "$RUNNER_TEMP/ci-repo.tar.gz" -C "$CI_ROOT" --strip-components=1
+          rm -f "$RUNNER_TEMP/ci-repo.tar.gz"
+          {
+            echo "CI_ROOT=$CI_ROOT"
+            echo "CI_SCRIPTS=$CI_ROOT/scripts"
+          } >> $GITHUB_ENV
+          ls "$CI_ROOT/scripts" "$CI_ROOT/security_patch"
 
       - name: 添加KernelSU
         id: ksu_version
@@ -296,76 +313,8 @@ jobs:
             sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
           elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             echo "正在配置 FinaSU..."
-            # FinaSU 的 kernel/setup.sh 会自己 clone/checkout，这里按上游 in-tree 集成方式手动完成
-            # 全量 clone 而非 --depth 1：Kbuild 用 rev-list --count HEAD 算版本号，浅仓库会算成 30001
-            git clone https://github.com/LyraVoid/FinaSU.git KernelSU
-            DRIVER_DIR="./common/drivers"
-            ln -sfn "$(realpath --relative-to="$DRIVER_DIR" "$PWD/KernelSU/kernel")" "$DRIVER_DIR/kernelsu"
-            grep -q "obj-.*CONFIG_KSU.*kernelsu/" "$DRIVER_DIR/Makefile" || \
-              echo 'obj-$(CONFIG_KSU) += kernelsu/' >> "$DRIVER_DIR/Makefile"
-            grep -q 'source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig" || \
-              sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$DRIVER_DIR/Kconfig"
-
-            # 与 FinaSU Kbuild 同源的版本号：30000 + git 提交数
-            KSU_VERSION=$(expr $(git -C KernelSU rev-list --count HEAD) + 30000)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-
-            # FinaSU Kbuild 的默认信任槽是上游 KernelSU 官方管理器签名（0x033b/c371061b…），
-            # 官方 FinaSU 管理器走第二信任槽（EXPECTED_SIZE2/HASH2）；不注入时
-            # 内核只认 KernelSU 官方管理器，FinaSU 管理器显示“未安装”。
-            FINASU_TMP=$(mktemp -d)
-            FINASU_CERT="${{ github.event.inputs.finasu_cert }}"
-            if [ -n "$FINASU_CERT" ]; then
-              KSU_CERT_SIZE=$(echo "$FINASU_CERT" | awk '{print $1}')
-              KSU_CERT_HASH=$(echo "$FINASU_CERT" | awk '{print $2}')
-            else
-              echo "未指定 finasu_cert，从 FinaSU 最新 Release APK 提取管理器证书..."
-              curl -fsSL "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/finasu_compat/extract_manager_cert.py" \
-                -o "$FINASU_TMP/extract_manager_cert.py"
-              REL_URL=$(curl -s --fail --max-time 60 "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest" \
-                | python3 -c "import json,sys;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))" 2>/dev/null || true)
-              if [ -z "$REL_URL" ]; then
-                echo "::error::无法获取 FinaSU 最新 Release 的 APK 资产，可用 finasu_cert 输入手动指定证书"
-                exit 1
-              fi
-              curl -sL --fail --retry 3 --max-time 600 -o "$FINASU_TMP/manager.apk" "$REL_URL" || {
-                echo "::error::下载 FinaSU Release APK 失败"
-                exit 1
-              }
-              CERT_INFO=$(python3 "$FINASU_TMP/extract_manager_cert.py" "$FINASU_TMP/manager.apk" | head -n1)
-              KSU_CERT_SIZE=$(printf '%s' "$CERT_INFO" | awk '{print $1}')
-              KSU_CERT_HASH=$(printf '%s' "$CERT_INFO" | awk '{print $2}')
-            fi
-            if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
-              echo "::error::FinaSU 管理器证书未获取到（finasu_cert 格式应为 \"0xXXXX <sha256>\"）"
-              exit 1
-            fi
-            echo "注入 FinaSU 管理器证书到第二信任槽: size=$KSU_CERT_SIZE sha256=$KSU_CERT_HASH"
-            awk -v size="$KSU_CERT_SIZE" -v hash="$KSU_CERT_HASH" '
-              !done && /^ccflags-y \+= -DEXPECTED_HASH=/ {
-                print
-                print "# injected by CI: trust the official FinaSU manager via the second signature slot"
-                print "KSU_EXPECTED_SIZE2 := " size
-                print "KSU_EXPECTED_HASH2 := " hash
-                print "KSU_SECOND_SIGNATURE_RELEASE := 1"
-                done = 1
-                next
-              }
-              { print }
-            ' KernelSU/kernel/Kbuild > KernelSU/kernel/Kbuild.new && mv KernelSU/kernel/Kbuild.new KernelSU/kernel/Kbuild
-            grep -q "^KSU_EXPECTED_SIZE2 := " KernelSU/kernel/Kbuild && \
-              grep -q "^KSU_EXPECTED_HASH2 := " KernelSU/kernel/Kbuild && \
-              grep -q "^KSU_SECOND_SIGNATURE_RELEASE := 1" KernelSU/kernel/Kbuild || {
-                echo "::error::Kbuild 证书注入失败（锚点 ccflags-y += -DEXPECTED_HASH= 缺失，FinaSU Kbuild 结构可能已变化）"
-                exit 1
-              }
-
-            # 管理器里“内核完整版本”的 @<branch> 固定成品牌名（CI 检出后是 master，
-            # 与 SukiSU/BakaSU 的 @LingLuo 展示保持一致）；必须在上面的 awk 改写之后调用
-            curl -fsSL "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/ksu_post_setup.sh" \
-              -o "$FINASU_TMP/ksu_post_setup.sh"
-            bash "$FINASU_TMP/ksu_post_setup.sh" KernelSU finasu
+            # clone / in-tree 挂载 / 版本号 / 管理器证书注入 / 品牌化 都在脚本里
+            bash "$CI_SCRIPTS/apply_finasu.sh" "." "${{ github.event.inputs.finasu_cert }}"
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -373,74 +322,13 @@ jobs:
       - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
         run: |
-          cd kernel_workspace
-          if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            echo "正在添加susfs补丁..."
-            SUSFS_KMI="${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
-            if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
-              # FinaSU 内核侧锁的是 SUSFS 2.4.0（ec03d0c）：新代次补丁走 fs/susfs.c 的
-              # susfs_add_sus_type / fake_status。cctv18/susfs4oki 的 oki-* 分支是旧代次
-              # （extern struct selinux_state fake_state），FinaSU 驱动里没有这个符号，
-              # 链接会直接报 undefined symbol: fake_state
-              SUSFS_REPO="ShirkNeko/susfs4ksu"
-              SUSFS_BRANCH="gki-$SUSFS_KMI"
-            else
-              SUSFS_REPO="cctv18/susfs4oki"
-              SUSFS_BRANCH="oki-$SUSFS_KMI"
-            fi
-            git clone --depth=1 "https://github.com/$SUSFS_REPO.git" susfs4ksu -b "$SUSFS_BRANCH"
-            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
-            cp "./susfs4ksu/kernel_patches/50_add_susfs_in_gki-$SUSFS_KMI.patch" ./common/
-            cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
-            cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-            cd ./common
-            patch -p1 -F 3 < "50_add_susfs_in_gki-$SUSFS_KMI.patch" || true
-            patch -p1 -N -F 3 < 69_hide_stuff.patch || true
-            if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
-              # OKI 树的 include 区和 GKI 不一致，两个 hunk 靠 -F3 也可能落不下来，逐个补
-              grep -q 'susfs_def.h' fs/proc/base.c || \
-                sed -i '/^#include <trace\/events\/oom.h>/i #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/base.c
-              if ! grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c; then
-                awk '
-                  !done && /^\/\* Maximum number of mounts in a mount namespace \*\// {
-                    print "#ifdef CONFIG_KSU_SUSFS"
-                    print "#include <linux/susfs_def.h>"
-                    print "#endif"
-                    print ""
-                    print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
-                    print "extern bool susfs_is_current_ksu_domain(void);"
-                    print "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;"
-                    print ""
-                    print "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */"
-                    print "#endif"
-                    print ""
-                    done = 1
-                  }
-                  { print }
-                ' fs/namespace.c > fs/namespace.c.tmp && mv fs/namespace.c.tmp fs/namespace.c
-              fi
-              # 缺一处就说明补丁没打全，这里直接失败，别拖到链接期
-              for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-                [ -f "$f" ] || { echo "::error::SUSFS 新代次补丁未落盘: $f 缺失"; exit 1; }
-              done
-              # namespace.c 那个 hunk 已经被上面的 awk 兜底替代，rej 留着只是噪音
-              rm -f fs/namespace.c.rej 2>/dev/null || true
-              grep -q 'susfs_add_sus_type' fs/susfs.c || { echo "::error::fs/susfs.c 缺 susfs_add_sus_type"; exit 1; }
-              grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c || { echo "::error::fs/namespace.c 缺 CL_COPY_MNT_NS"; exit 1; }
-              grep -q 'susfs_def.h' fs/proc/base.c || { echo "::error::fs/proc/base.c 缺 susfs_def.h"; exit 1; }
-              echo "FinaSU: SUSFS 新代次补丁集应用完成（$SUSFS_REPO@$(git -C ../susfs4ksu rev-parse --short HEAD)）"
-            fi
-            cd ..
-          else
-            echo "已选择无内置KernelSU模式，跳过susfs配置..."
-          fi
-          if [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
-            echo "正在为原版 KernelSU (tiann/KernelSU)添加补丁..."
-            cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-            cd ./KernelSU
-            patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
-          fi
-          
+          # 补丁代次选择、OKI 树 hunk 兜底、落盘自检都在脚本里；
+          # finasu 走 ShirkNeko/susfs4ksu 的新代次，其余走 cctv18/susfs4oki
+          bash "$CI_SCRIPTS/apply_susfs.sh" \
+            "$GITHUB_WORKSPACE/kernel_workspace" \
+            "${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}" \
+            "${{ github.event.inputs.ksu_type }}"
+
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
         if: inputs.lz4_enable
         run: |
@@ -468,7 +356,7 @@ jobs:
           cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
           cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
           patch -p1 -F 3 < lz4kd.patch || true
-          
+
       - name: 添加SUSFS 配置项
         if: inputs.susfs_enable
         run: |
@@ -494,7 +382,7 @@ jobs:
             # fs/susfs.o 上撞 -Werror=unused-function
             echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> ./common/arch/arm64/configs/gki_defconfig
           fi
-          
+
       - name: 添加 KSU & 其他配置项
         run: |
           cd kernel_workspace
@@ -525,32 +413,20 @@ jobs:
             sed -i 's/^CONFIG_HEADERS_INSTALL=n$/CONFIG_HEADERS_INSTALL=y/' ./common/arch/arm64/configs/gki_defconfig
           fi
           # CVE-2026-43499 已改为独立步骤「应用 CVE-2026-43499 rtmutex 修复链」，这里不再叠加单补丁
-          
+
       - name: 应用 CVE-2026-43499 rtmutex 修复链
         if: inputs.cve_2026_43499_patch
         run: |
           set -e
           echo "正在应用 CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链…"
-          cd kernel_workspace
-          # 本工作流不做 checkout，按 tarball 取 security_patch/ 整个目录
-          CVE_PATCH_DIR="$(mktemp -d)"
-          curl -sSL "https://codeload.github.com/$GITHUB_REPOSITORY/tar.gz/refs/heads/$GITHUB_REF_NAME" -o "$CVE_PATCH_DIR/repo.tar.gz"
-          tar --force-local -xzf "$CVE_PATCH_DIR/repo.tar.gz" -C "$CVE_PATCH_DIR" --strip-components=2 --wildcards "*/security_patch/*"
-          rm -f "$CVE_PATCH_DIR/repo.tar.gz"
-          # tarball 根目录层级不是预期时兜底拉平，避免脚本找不到
-          if [ -d "$CVE_PATCH_DIR/security_patch" ]; then
-            mv "$CVE_PATCH_DIR/security_patch"/* "$CVE_PATCH_DIR"/
-            rmdir "$CVE_PATCH_DIR/security_patch"
-          fi
-
-          # 版本号从源码树读，避免写死；脚本内部按 SUBLEVEL 判断上游是否已含修复
-          KVER_MAJOR=$(awk '/^VERSION =/{print $3; exit}' ./common/Makefile)
-          KVER_PATCH=$(awk '/^PATCHLEVEL =/{print $3; exit}' ./common/Makefile)
-          KVER_SUB=$(awk '/^SUBLEVEL =/{print $3; exit}' ./common/Makefile)
+          # 版本号从源码树读，脚本内部按 SUBLEVEL 判断上游是否已含修复
+          KVER_MAJOR=$(awk '/^VERSION =/{print $3; exit}' kernel_workspace/common/Makefile)
+          KVER_PATCH=$(awk '/^PATCHLEVEL =/{print $3; exit}' kernel_workspace/common/Makefile)
+          KVER_SUB=$(awk '/^SUBLEVEL =/{print $3; exit}' kernel_workspace/common/Makefile)
           echo "当前内核版本: $KVER_MAJOR.$KVER_PATCH.$KVER_SUB"
-
-          cd ./common
-          bash "$CVE_PATCH_DIR/apply_cve_2026_43499.sh" "$KVER_MAJOR.$KVER_PATCH" "$KVER_SUB" "$CVE_PATCH_DIR"
+          ( cd kernel_workspace/common && \
+            bash "$CI_ROOT/security_patch/apply_cve_2026_43499.sh" \
+              "$KVER_MAJOR.$KVER_PATCH" "$KVER_SUB" "$CI_ROOT/security_patch" )
 
       - name: 启用网络功能增强优化配置
         if: inputs.better_net
@@ -685,74 +561,10 @@ jobs:
       - name: 启用 ReKernel-X 支持
         if: inputs.rekernel_enable
         run: |
-          set -e
-          echo "正在集成 ReKernel-X（Binder 事务 / 信号 / 网络钩子，配合 Freezer、NoActive 等冻结类模块降低功耗）…"
-          cd kernel_workspace
-          RKX_SRC=/tmp/rekernel_x_src
-          rm -rf "$RKX_SRC"
-          git clone --depth 1 https://github.com/myflavor/ReKernel-X.git "$RKX_SRC"
-          RKX_COMMIT=$(git -C "$RKX_SRC" rev-parse --short HEAD)
-          echo "ReKernel-X upstream commit: $RKX_COMMIT"
+          # 拉上游 LKM-Source、生成 in-tree Kconfig/Makefile、摘掉厂商预置的 Re-Kernel，
+          # 全部在脚本里，本地 builder 复用同一份
+          bash "$CI_SCRIPTS/apply_rekernel_x.sh" "$GITHUB_WORKSPACE/kernel_workspace"
 
-          # 上游是外置 LKM 包（LKM-Source/），整包搬进官方驱动树
-          RKX_DIR=./common/drivers/rekernel_x
-          rm -rf "$RKX_DIR"
-          mkdir -p "$RKX_DIR"
-          cp -a "$RKX_SRC/LKM-Source/." "$RKX_DIR/"
-
-          # 上游没有 Kconfig（外置模块靠 obj-m 编译），in-tree 编译必须自建
-          {
-            echo 'config REKERNEL_X'
-            echo '	bool "ReKernel-X: binder / signal / network runtime hooks"'
-            echo '	default n'
-            echo '	help'
-            echo '	  ReKernel-X 内核侧运行时钩子：Binder 事务与异步缓存清理、信号投递、'
-            echo '	  网络回流事件，经 Generic Netlink 上报用户态模块。'
-            echo ''
-            echo 'config REKERNEL_X_DEBUG'
-            echo '	bool "ReKernel-X debug logging"'
-            echo '	depends on REKERNEL_X'
-            echo '	default n'
-            echo '	help'
-            echo '	  打开 rkx_log_debug（正式包不要开，会持续打印）。'
-          } > "$RKX_DIR/Kconfig"
-
-          # 外置模块 Makefile -> in-tree 规则；上游版本号写进 ccflags
-          {
-            echo '# ReKernel-X in-tree build rules (generated by CI)'
-            echo 'obj-$(CONFIG_REKERNEL_X) += rekernel_x.o'
-            echo ''
-            echo 'rekernel_x-y := rkx.o rkx_genl.o rkx_netuid.o rkx_free_async.o rkx_frozen.o \'
-            echo '                rkx_binder.o rkx_signal.o rkx_netfilter.o rkx_binder_kp.o rkx_binder_alloc.o'
-            echo ''
-            printf 'ccflags-y += -DRKX_VERSION=\\"%s\\"\n' "$RKX_COMMIT"
-            echo 'ccflags-$(CONFIG_REKERNEL_X_DEBUG) += -DRKX_DEBUG'
-          } > "$RKX_DIR/Makefile"
-
-          # 清掉厂商树里预置的 Re-Kernel：CONFIG_REKERNEL 不再启用，留着是死代码，
-          # 且两套 binder 钩子并存，一旦被 defconfig 重新打开会互相干扰
-          rm -rf ./common/drivers/rekernel
-          sed -i '/^#Re-Kernel Support$/d' ./common/drivers/Makefile
-          sed -i 's|^obj-$(CONFIG_REKERNEL)[[:space:]]*+= rekernel/|obj-$(CONFIG_REKERNEL_X) += rekernel_x/|' ./common/drivers/Makefile
-          sed -i 's|^source "drivers/rekernel/Kconfig"$|source "drivers/rekernel_x/Kconfig"|' ./common/drivers/Kconfig
-          sed -i '/^CONFIG_REKERNEL=y$/d' ./common/arch/arm64/configs/gki_defconfig
-
-          # 驱动树结构与预期不符时补挂一次（幂等）
-          grep -qF 'source "drivers/rekernel_x/Kconfig"' ./common/drivers/Kconfig || \
-            sed -i '/^endmenu$/i source "drivers/rekernel_x/Kconfig"' ./common/drivers/Kconfig
-          grep -qF 'obj-$(CONFIG_REKERNEL_X) += rekernel_x/' ./common/drivers/Makefile || \
-            echo 'obj-$(CONFIG_REKERNEL_X) += rekernel_x/' >> ./common/drivers/Makefile
-
-          # 老树 binder_internal.h 里用了 DEFINE_SHOW_ATTRIBUTE，需要先引入 seq_file.h（幂等）
-          for RKX_F in rkx_binder.c rkx_binder_kp.c rkx_binder_alloc.h; do
-            grep -qF '#include <linux/seq_file.h>' "$RKX_DIR/$RKX_F" && continue
-            sed -i '/#include "\.\.\/android\/binder_internal\.h"/i #include <linux/seq_file.h>' "$RKX_DIR/$RKX_F"
-          done
-
-          grep -q '^CONFIG_REKERNEL_X=y$' ./common/arch/arm64/configs/gki_defconfig || \
-            echo "CONFIG_REKERNEL_X=y" >> ./common/arch/arm64/configs/gki_defconfig
-
-          echo "ReKernel-X 集成完成（upstream $RKX_COMMIT）"
       - name: 启用内核级基带保护
         if: inputs.baseband_guard
         run: |
@@ -778,7 +590,7 @@ jobs:
               sed -i "\$s|echo \"\\\$res\"|echo \"-${{ env.KERNEL_NAME }}\"|" "$f"
             done
           fi
-           
+
       - name: 构建内核
         run: |
           WORKDIR="$(pwd)"
@@ -879,7 +691,7 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
-         
+
       - name: 应用KPM并修补内核
         if: inputs.kpm_enable
         run: |
@@ -891,7 +703,7 @@ jobs:
           ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
           rm -f Image
           mv oImage Image
-          
+
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
         run: |
@@ -982,6 +794,7 @@ jobs:
       actions: read
       
     steps:
+
       - name: 下载 ZIP 工件
         uses: actions/download-artifact@v8
         with:
@@ -1020,7 +833,7 @@ jobs:
             KSU_TYPENAME="无内置KSU"
           fi
           echo "KSU_TYPENAME=$KSU_TYPENAME" >> $GITHUB_ENV
-         
+
       - name: 创建发布
         id: create_release
         env:
