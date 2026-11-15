@@ -213,14 +213,57 @@ cd "$WORKDIR/kernel_workspace"
 echo ">>> 应用 SUSFS&hook 补丁..."
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo ">>> 克隆补丁仓库..."
-  git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android14-6.1
+  SUSFS_KMI="android14-6.1"
+  if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+    # FinaSU 锁 SUSFS 2.4.0（ec03d0c）：新代次补丁走 susfs_add_sus_type / fake_status；
+    # cctv18/susfs4oki 的 oki-* 是旧代次（extern struct selinux_state fake_state），
+    # 和 FinaSU 驱动对不上，链接会报 undefined symbol: fake_state
+    SUSFS_REPO="ShirkNeko/susfs4ksu"
+    SUSFS_BRANCH="gki-$SUSFS_KMI"
+  else
+    SUSFS_REPO="cctv18/susfs4oki"
+    SUSFS_BRANCH="oki-$SUSFS_KMI"
+  fi
+  git clone --depth=1 "https://github.com/$SUSFS_REPO.git" susfs4ksu -b "$SUSFS_BRANCH"
   wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
-  cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch ./common/
+  cp "./susfs4ksu/kernel_patches/50_add_susfs_in_gki-$SUSFS_KMI.patch" ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
   cd ./common
-  patch -p1 -F 3 < 50_add_susfs_in_gki-android14-6.1.patch || true
+  patch -p1 -F 3 < "50_add_susfs_in_gki-$SUSFS_KMI.patch" || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true
+  if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+    # OKI 树 include 区与 GKI 不同，两个 hunk 靠 -F3 也可能落不下来，逐个补
+    grep -q 'susfs_def.h' fs/proc/base.c || \
+      sed -i '/^#include <trace\/events\/oom.h>/i #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/base.c
+    if ! grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c; then
+      awk '
+        !done && /^\/\* Maximum number of mounts in a mount namespace \*\// {
+          print "#ifdef CONFIG_KSU_SUSFS"
+          print "#include <linux/susfs_def.h>"
+          print "#endif"
+          print ""
+          print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
+          print "extern bool susfs_is_current_ksu_domain(void);"
+          print "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;"
+          print ""
+          print "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */"
+          print "#endif"
+          print ""
+          done = 1
+        }
+        { print }
+      ' fs/namespace.c > fs/namespace.c.tmp && mv fs/namespace.c.tmp fs/namespace.c
+    fi
+    for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
+      [ -f "$f" ] || { echo "[ERROR] SUSFS 新代次补丁未落盘: $f 缺失" >&2; exit 1; }
+    done
+    # namespace.c 的 hunk 已由 awk 兜底替代，rej 不留
+    rm -f fs/namespace.c.rej 2>/dev/null || true
+    grep -q 'susfs_add_sus_type' fs/susfs.c || { echo "[ERROR] fs/susfs.c 缺 susfs_add_sus_type" >&2; exit 1; }
+    grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c || { echo "[ERROR] fs/namespace.c 缺 CL_COPY_MNT_NS" >&2; exit 1; }
+    echo ">>> FinaSU: SUSFS 新代次补丁集应用完成（$SUSFS_REPO@$(git -C ../susfs4ksu rev-parse --short HEAD)）"
+  fi
 else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
@@ -288,6 +331,10 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$DEFCONFIG_FILE"
+  if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+    # 2.4.0 补丁集：不开这个 option 会在 fs/susfs.o 上撞 -Werror=unused-function
+    echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> "$DEFCONFIG_FILE"
+  fi
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"
 fi

@@ -376,14 +376,60 @@ jobs:
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在添加susfs补丁..."
-            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            SUSFS_KMI="${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+            if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+              # FinaSU 内核侧锁的是 SUSFS 2.4.0（ec03d0c）：新代次补丁走 fs/susfs.c 的
+              # susfs_add_sus_type / fake_status。cctv18/susfs4oki 的 oki-* 分支是旧代次
+              # （extern struct selinux_state fake_state），FinaSU 驱动里没有这个符号，
+              # 链接会直接报 undefined symbol: fake_state
+              SUSFS_REPO="ShirkNeko/susfs4ksu"
+              SUSFS_BRANCH="gki-$SUSFS_KMI"
+            else
+              SUSFS_REPO="cctv18/susfs4oki"
+              SUSFS_BRANCH="oki-$SUSFS_KMI"
+            fi
+            git clone --depth=1 "https://github.com/$SUSFS_REPO.git" susfs4ksu -b "$SUSFS_BRANCH"
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
-            cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
+            cp "./susfs4ksu/kernel_patches/50_add_susfs_in_gki-$SUSFS_KMI.patch" ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             cd ./common
-            patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+            patch -p1 -F 3 < "50_add_susfs_in_gki-$SUSFS_KMI.patch" || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
+            if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+              # OKI 树的 include 区和 GKI 不一致，两个 hunk 靠 -F3 也可能落不下来，逐个补
+              grep -q 'susfs_def.h' fs/proc/base.c || \
+                sed -i '/^#include <trace\/events\/oom.h>/i #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/base.c
+              if ! grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c; then
+                awk '
+                  !done && /^\/\* Maximum number of mounts in a mount namespace \*\// {
+                    print "#ifdef CONFIG_KSU_SUSFS"
+                    print "#include <linux/susfs_def.h>"
+                    print "#endif"
+                    print ""
+                    print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT"
+                    print "extern bool susfs_is_current_ksu_domain(void);"
+                    print "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;"
+                    print ""
+                    print "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */"
+                    print "#endif"
+                    print ""
+                    done = 1
+                  }
+                  { print }
+                ' fs/namespace.c > fs/namespace.c.tmp && mv fs/namespace.c.tmp fs/namespace.c
+              fi
+              # 缺一处就说明补丁没打全，这里直接失败，别拖到链接期
+              for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
+                [ -f "$f" ] || { echo "::error::SUSFS 新代次补丁未落盘: $f 缺失"; exit 1; }
+              done
+              # namespace.c 那个 hunk 已经被上面的 awk 兜底替代，rej 留着只是噪音
+              rm -f fs/namespace.c.rej 2>/dev/null || true
+              grep -q 'susfs_add_sus_type' fs/susfs.c || { echo "::error::fs/susfs.c 缺 susfs_add_sus_type"; exit 1; }
+              grep -q 'CL_COPY_MNT_NS BIT(25)' fs/namespace.c || { echo "::error::fs/namespace.c 缺 CL_COPY_MNT_NS"; exit 1; }
+              grep -q 'susfs_def.h' fs/proc/base.c || { echo "::error::fs/proc/base.c 缺 susfs_def.h"; exit 1; }
+              echo "FinaSU: SUSFS 新代次补丁集应用完成（$SUSFS_REPO@$(git -C ../susfs4ksu rev-parse --short HEAD)）"
+            fi
             cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
@@ -442,6 +488,12 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            # FinaSU 的 2.4.0 补丁集把 susfs_switch_to_ksu_domain / susfs_restore_creds
+            # 定义在 #ifdef 之外，只有优先级过滤逻辑调用；不开这个 option 会在
+            # fs/susfs.o 上撞 -Werror=unused-function
+            echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
           
       - name: 添加 KSU & 其他配置项
         run: |
