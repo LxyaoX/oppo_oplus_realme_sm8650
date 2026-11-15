@@ -36,6 +36,7 @@
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] FinaSU SUSFS Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE`，内核树直调入口替代 tracepoint/dispatcher/kprobe）
 - [x] SUSFS 隐藏增强（`/proc/susfs_hide_modules` 模块名、`/proc/susfs_hide_mounts` 挂载前缀）
+- [x] 网络增强全家桶（BBRv3 升级 + IPSet / Qdisc / WireGuard / CIFS，从 AnyKernel3 移植）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 维护
@@ -51,7 +52,7 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 # 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
 ```
 
-补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_finasu.sh`、`security_patch/`），
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
 
 ## SUSFS Inline 后端（FinaSU）
@@ -100,6 +101,32 @@ cat /proc/susfs_hide_mounts
 （`userspace/ksud/src/susfs/mod.rs:152` 的 `proc()`，以及 `:780` 的单元测试 `assert!(!builtin_capabilities.supported.contains(&"hidden_modules"))`），
 而 `libksud.so` 随管理器 APK 分发、不在内核构建范围内。内核侧提供 `/proc` 节点后功能本身可用，
 命令行/模块脚本直接写即可。反过来把内核伪装成 lkm 会连累 `full_clone`、`avc_spoof` 和整个页面变只读，不做。
+
+## 网络增强全家桶（BBRv3 / Qdisc / WireGuard / CIFS）
+从 AnyKernel3 移植。开关是工作流的 `net_enhance`（默认 true），本地 builder 问 `NET_ENHANCE`。
+
+| 块 | 内容 | 来源 |
+|---|---|---|
+| BBRv3 | `net/ipv4/tcp_bbr3.c` + `tcp_plb.c`（PLB 保护性负载均衡），`TCP_CONG_BBR3` / `DEFAULT_BBR3` | WildKernels/kernel_patches `common/bbrv3/0001-*-android14-6.1.patch` |
+| IPSet | 16 种集合类型 + `IP_SET_MAX=65534` + netfilter 联动（addrtype / set / log / recent） | 与 `better_net` 同源，脚本里幂等重写 |
+| Qdisc | `fq` / `fq_codel` / `cake` + `NET_ACT_CONNMARK` | AnyKernel3 |
+| TTL/HopLimit | `IP_NF_TARGET_TTL` / `IP6_NF_TARGET_HL` / `IP6_NF_MATCH_HL` | AnyKernel3 |
+| WireGuard | `CONFIG_WIREGUARD=y` | AnyKernel3 |
+| CIFS | `CIFS` + `XATTR` / `POSIX` + `KEYS` + `NETWORK_FILESYSTEMS` | AnyKernel3 |
+
+**BBR 版本从 v1 升到 v3**。默认拥塞控制跟随 `bbr_enable`：
+
+| `bbr_enable` | BBRv3 算法 | 默认拥塞控制 |
+|---|---|---|
+| `false` | 不打补丁、不编（走 `none`） | 内核默认（cubic） |
+| `true` | 编进去，可选 | `cubic`（原语义不变） |
+| `default` | 编进去 | **`bbr3`**（原来这里是 bbr v1） |
+
+补丁在厂商 6.1 树上实测 `patch -p1 --dry-run` rc=0，`net/ipv4/Kconfig`、`tcp_input.c` 等若干 hunk 靠 offset/fuzz 落位（LTS 合入上游 stable 会让上下文漂移）。砸不上时降级 BBR v1 并打 `::warning`，其余配置照常写，不挂掉整个构建。
+
+与 AnyKernel3 的两点差异：
+- CIFS=y 后 AnyKernel3 要去改 `modules.bzl`（bazel 模块清单会因为 netfs.ko 被内建而校验失败）；本仓库用 `make Image`，无此清单，不用改。
+- 5.10 才需要的 `sysctl_add_proc_dou8vec_minmax` 前置补丁与 `add_tcp_snd_cwnd.py` 兼容脚本没搬：6.1 的 `include/net/tcp.h` 已有 `tcp_snd_cwnd()` accessors，厂商树实测 6 处。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~

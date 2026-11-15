@@ -76,6 +76,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      net_enhance:
+        description: '网络增强全家桶(BBRv3 源码补丁 + IPSet/Qdisc fq·fq_codel·cake/connmark/TTL/WireGuard/CIFS)'
+        required: true
+        type: boolean
+        default: 'true'
       ssg_enable:
         description: '是否启用三星SSG IO调度器支持(提升IO读写性能; 在一加12上可能导致bug)'
         required: true
@@ -515,6 +520,23 @@ jobs:
             fi
           fi
 
+      - name: 应用网络增强（BBRv3 / Qdisc / WireGuard / CIFS）
+        if: inputs.net_enhance
+        run: |
+          # BBRv3 补丁 + IPSet/Qdisc/connmark/TTL/WireGuard/CIFS 配置都在脚本里。
+          # 默认拥塞控制跟随 bbr_enable：false 不动、true 用 cubic、default 用 bbr3
+          if [[ "${{ github.event.inputs.bbr_enable }}" == "false" ]]; then
+            NET_CC=none
+          elif [[ "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
+            NET_CC=bbr3
+          else
+            NET_CC=cubic
+          fi
+          bash "$CI_SCRIPTS/apply_net_enhance.sh" \
+            "$GITHUB_WORKSPACE/kernel_workspace" \
+            "${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}" \
+            "$NET_CC"
+
       - name: 启用 Droidspaces 容器支持
         run: |
           if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
@@ -783,6 +805,7 @@ jobs:
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
+          echo "Net enhance(BBRv3/Qdisc/CIFS): ${{ github.event.inputs.net_enhance }}" >> ./ak3.log
           echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
           echo "SSG: ${{ github.event.inputs.ssg_enable }}" >> ./ak3.log
@@ -870,6 +893,7 @@ jobs:
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
+          - 网络增强全家桶(BBRv3/Qdisc/WireGuard/CIFS)：${{ github.event.inputs.net_enhance }}
           - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
           - 三星SSG IO调度器支持：${{ github.event.inputs.ssg_enable }}
