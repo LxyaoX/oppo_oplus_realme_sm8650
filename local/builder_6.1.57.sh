@@ -17,6 +17,8 @@ read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，�
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
 read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, f=FinaSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
+read -p "FinaSU 是否启用 SUSFS Inline 后端？(y/n，默认：y，仅 FinaSU 生效): " USE_SUSFS_INLINE
+USE_SUSFS_INLINE=${USE_SUSFS_INLINE:-y}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
 read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
@@ -56,6 +58,9 @@ echo "适用机型: $MANIFEST"
 echo "自定义内核后缀: -$CUSTOM_SUFFIX"
 echo "KSU分支版本: $KSU_TYPE"
 echo "启用susfs: $APPLY_SUSFS"
+if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+  echo "SUSFS Inline 后端: $USE_SUSFS_INLINE"
+fi
 echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
@@ -228,6 +233,10 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
     # 2.4.0 补丁集：不开这个 option 会在 fs/susfs.o 上撞 -Werror=unused-function
     echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> "$DEFCONFIG_FILE"
+    # Inline 后端：syscall 走内核树直调入口。入口校验 + choice 开关 + 依赖兜底在脚本里
+    if [[ "$USE_SUSFS_INLINE" == [yY] ]]; then
+      bash "$SCRIPT_DIR/../scripts/apply_susfs_inline.sh" "$WORKDIR/kernel_workspace"
+    fi
   fi
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"

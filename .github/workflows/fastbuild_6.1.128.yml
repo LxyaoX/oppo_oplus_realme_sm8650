@@ -33,6 +33,11 @@ on:
         required: true
         type: boolean
         default: 'true'
+      susfs_inline:
+        description: 'FinaSU 专用：启用 SUSFS Inline 后端（syscall 走内核树直调入口，不注册 tracepoint/dispatcher/kprobe；仅 ksu_type=finasu 且开启 susfs 时生效）'
+        required: true
+        type: boolean
+        default: 'true'
       kpm_enable:
         description: '是否开启kpm(使用KpatchNext独立实现kpm(支持任意KSU/面具环境); 不需要可保持默认关闭)'
         required: true
@@ -381,6 +386,11 @@ jobs:
             # 定义在 #ifdef 之外，只有优先级过滤逻辑调用；不开这个 option 会在
             # fs/susfs.o 上撞 -Werror=unused-function
             echo "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" && "${{ github.event.inputs.susfs_inline }}" == "true" ]]; then
+            # 此刻 50 补丁已打（ksu_handle_* 调用点齐）、FinaSU 驱动已 clone；
+            # 入口校验 + choice 开关 + 依赖兜底都在脚本里
+            bash "$CI_SCRIPTS/apply_susfs_inline.sh" "$GITHUB_WORKSPACE/kernel_workspace"
           fi
 
       - name: 添加 KSU & 其他配置项
@@ -760,6 +770,9 @@ jobs:
           echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
           echo "KSU Ver: ${KSUVER}" >> ./ak3.log
           echo "susfs: ${{ github.event.inputs.susfs_enable }}" >> ./ak3.log
+          if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_inline }}" == "true" ]]; then
+            echo "susfs hook: inline" >> ./ak3.log
+          fi
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
@@ -846,6 +859,7 @@ jobs:
           - 机型：欧加真骁龙8Gen3通用 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 内核（基于一加平板 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 版官方OKI源码）
           - KSU分支：${{ env.KSU_TYPENAME }}
           - susfs支持：${{ github.event.inputs.susfs_enable }}
+          - SUSFS Inline 后端：${{ github.event.inputs.susfs_inline }}（仅 FinaSU 生效）
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}

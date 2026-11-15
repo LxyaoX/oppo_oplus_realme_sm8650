@@ -34,6 +34,7 @@
 - [x] Droidspaces 容器化支持（比传统 Docker/LXC 更轻量化，便于移植的完整 Linux 环境容器实现）
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
+- [x] FinaSU SUSFS Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE`，内核树直调入口替代 tracepoint/dispatcher/kprobe）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 维护
@@ -49,8 +50,20 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 # 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
 ```
 
-补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_finasu.sh`、`security_patch/`），
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
+
+## SUSFS Inline 后端（FinaSU）
+`ksu_type=finasu` 且开启 susfs 时，默认走 FinaSU 的 Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE=y`）：syscall 由内核树里的直调入口处理，不注册通用 sys_enter tracepoint、dispatcher 和替换式 kprobe。开关是工作流的 `susfs_inline` 输入（本地 builder 问 `USE_SUSFS_INLINE`），关掉即回到 FinaSU 默认的 Tracepoint 后端。
+
+依赖链是硬的，缺一环就编不过或静默回退：
+
+| 环节 | 谁提供 | 缺了会怎样 |
+|---|---|---|
+| 内核树 12 个 `ksu_handle_*` 调用点 | `scripts/apply_susfs.sh`（ShirkNeko 50 补丁，`#ifdef CONFIG_KSU_SUSFS` 包裹） | 链接期 undefined symbol |
+| 驱动侧同名入口 | FinaSU `kernel/extension/susfs.c`（`CONFIG_KSU_HOOK_SUSFS_INLINE` 分支） | 同上 |
+| `KSU_SUSFS=y` + `KSU=y` | `scripts/apply_susfs_inline.sh` 兜底 | kconfig 把 inline 静默降级成 not set，后端实际还是 tracepoint |
+| preinit 头文件 | `CONFIG_HEADERS_INSTALL=y`（finasu 自动改写） | `fs/exec.c` 的两个 preinit 入口缺失，检查直接失败 |
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
