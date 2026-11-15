@@ -238,6 +238,8 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
       bash "$SCRIPT_DIR/../scripts/apply_susfs_inline.sh" "$WORKDIR/kernel_workspace"
     fi
   fi
+  # 模块名 / 挂载前缀隐藏：钩子要插进 50 补丁写过的文件，所以放在补丁之后
+  bash "$SCRIPT_DIR/../scripts/apply_susfs_hide.sh" "$WORKDIR/kernel_workspace"
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"
 fi

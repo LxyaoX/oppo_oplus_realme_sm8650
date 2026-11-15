@@ -392,6 +392,9 @@ jobs:
             # 入口校验 + choice 开关 + 依赖兜底都在脚本里
             bash "$CI_SCRIPTS/apply_susfs_inline.sh" "$GITHUB_WORKSPACE/kernel_workspace"
           fi
+          # 源码集成版补的两个隐藏能力：模块名（/proc/modules、/proc/kallsyms）
+          # 与挂载前缀（mounts/mountinfo/mountstats）。50 补丁的产物已就位才能插钩子
+          bash "$CI_SCRIPTS/apply_susfs_hide.sh" "$GITHUB_WORKSPACE/kernel_workspace"
 
       - name: 添加 KSU & 其他配置项
         run: |
@@ -774,6 +777,9 @@ jobs:
           echo "susfs: ${{ github.event.inputs.susfs_enable }}" >> ./ak3.log
           if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_inline }}" == "true" ]]; then
             echo "susfs hook: inline" >> ./ak3.log
+          fi
+          if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            echo "susfs hide: modules+mount_prefix" >> ./ak3.log
           fi
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log

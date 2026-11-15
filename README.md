@@ -35,6 +35,7 @@
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] FinaSU SUSFS Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE`，内核树直调入口替代 tracepoint/dispatcher/kprobe）
+- [x] SUSFS 隐藏增强（`/proc/susfs_hide_modules` 模块名、`/proc/susfs_hide_mounts` 挂载前缀）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 维护
@@ -64,6 +65,41 @@ CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内
 | 驱动侧同名入口 | FinaSU `kernel/extension/susfs.c`（`CONFIG_KSU_HOOK_SUSFS_INLINE` 分支） | 同上 |
 | `KSU_SUSFS=y` + `KSU=y` | `scripts/apply_susfs_inline.sh` 兜底 | kconfig 把 inline 静默降级成 not set，后端实际还是 tracepoint |
 | preinit 头文件 | `CONFIG_HEADERS_INSTALL=y`（finasu 自动改写） | `fs/exec.c` 的两个 preinit 入口缺失，检查直接失败 |
+
+## SUSFS 隐藏增强（模块名 / 挂载前缀）
+源码集成版（`CONFIG_KSU_SUSFS=y`）原本只有按 inode / `mnt_id` 标记的隐藏。按**模块名**和按**挂载前缀**
+归类这两个能力只存在于 SUSFS-LKM（靠 kprobe / inline patch 实现），源码集成版没有。本仓库把这两个能力
+补进内核树，接口格式与 LKM 一致：
+
+```sh
+# 模块名：从 /proc/modules 去掉该行，并过滤 /proc/kallsyms 里 [name] 结尾的行
+echo "add mysusfs"            > /proc/susfs_hide_modules
+echo "set mysusfs gadget"     > /proc/susfs_hide_modules   # 整份替换
+echo "del mysusfs"            > /proc/susfs_hide_modules
+echo clear                    > /proc/susfs_hide_modules
+cat /proc/susfs_hide_modules  # 命中计数 + 当前名单
+
+# 挂载前缀：决定 hide_sus_mnts_for_non_su_procs 生效时哪些挂载行对非 su 域不可见
+echo "add /data/adb/"         > /proc/susfs_hide_mounts
+echo "set /data/adb/ /data/local/tmp/" > /proc/susfs_hide_mounts
+echo reset                    > /proc/susfs_hide_mounts   # 回到默认的两个前缀
+echo clear                    > /proc/susfs_hide_mounts
+cat /proc/susfs_hide_mounts
+```
+
+| 项 | 说明 |
+|---|---|
+| 编译开关 | `CONFIG_KSU_SUSFS_HIDE_MODULES`、`CONFIG_KSU_SUSFS_HIDE_MOUNT_PREFIX`（都 `depends on KSU_SUSFS`，默认 y） |
+| 钩子位置 | `kernel/module/procfs.c:m_show`、`kernel/kallsyms.c:s_show`、`fs/proc_namespace.c` 三个 `susfs_show_*` |
+| `/sys/module/<名字>` | 不在本功能内，用已有的 sus_path 规则隐藏（`ksu_susfs add_sus_path /sys/module/<名字>`） |
+| 挂载前缀生效条件 | `hide_sus_mnts_for_non_su_procs` 打开时才对非 su 域隐藏；su 域本来读的是原始实现 |
+| 性能 | 前缀判定每个挂载行一次 `d_path()`（栈上 512B），前缀表为空时直接返回；模块名判定每个模块一行一次 strcmp |
+| 已知边界 | `/proc/modules` 只过滤行；别的模块 used-by 列里仍会带出被隐藏的名字 |
+
+**管理器的 SUSFS 开关为什么还是灰的**：FinaSU 的 `ksud` 判定这两个能力时写死了 `implementation == "lkm"`
+（`userspace/ksud/src/susfs/mod.rs:152` 的 `proc()`，以及 `:780` 的单元测试 `assert!(!builtin_capabilities.supported.contains(&"hidden_modules"))`），
+而 `libksud.so` 随管理器 APK 分发、不在内核构建范围内。内核侧提供 `/proc` 节点后功能本身可用，
+命令行/模块脚本直接写即可。反过来把内核伪装成 lkm 会连累 `full_clone`、`avc_spoof` 和整个页面变只读，不做。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
