@@ -346,6 +346,10 @@ echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$DEFCONFIG_FILE"
 echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$DEFCONFIG_FILE"
 #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
 echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
+if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+  # FinaSU preinit runner 需要 $(objtree)/usr/include 的目标 UAPI 头
+  sed -i 's/^CONFIG_HEADERS_INSTALL=n$/CONFIG_HEADERS_INSTALL=y/' "$DEFCONFIG_FILE"
+fi
 
 # ===== 应用 CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链 =====
 if [[ "$APPLY_CVE_2026_43499" != "n" && "$APPLY_CVE_2026_43499" != "N" ]]; then
@@ -573,7 +577,17 @@ sed -i 's/check_defconfig//' ./common/build.config.gki
 # ===== 编译内核 =====
 echo ">>> 开始编译内核..."
 cd common
-make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig all
+make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
+
+# FinaSU preinit 需要 $(objtree)/usr/include 的目标 UAPI 头（上游 built-in 集成做法：
+# CONFIG_HEADERS_INSTALL=y + KSU_REQUIRE_PREINIT=1）；缺头时驱动会静默排除 preinit.o，
+# 内核侧 fs/exec.c（SUSFS 50 补丁）却仍在调用 → 链接缺 ksu_setup_preinit_file。
+EXTRA_MAKE_ARGS=""
+if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
+  EXTRA_MAKE_ARGS="KSU_REQUIRE_PREINIT=1"
+fi
+
+make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error all $EXTRA_MAKE_ARGS
 echo ">>> 内核编译成功！"
 
 # ===== 选择使用 patch_linux (KPM补丁)=====

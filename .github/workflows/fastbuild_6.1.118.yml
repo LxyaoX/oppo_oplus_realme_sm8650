@@ -518,6 +518,12 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
           #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
           echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+            # FinaSU 的 preinit runner 要从 $(objtree)/usr/include 取目标 UAPI 头，
+            # =n 提速的前提是「不编 preinit」；finasu 必须打开，否则驱动静默关掉 preinit、
+            # 内核侧 fs/exec.c 仍在调用，链接期缺 ksu_setup_preinit_file
+            sed -i 's/^CONFIG_HEADERS_INSTALL=n$/CONFIG_HEADERS_INSTALL=y/' ./common/arch/arm64/configs/gki_defconfig
+          fi
           # CVE-2026-43499 已改为独立步骤「应用 CVE-2026-43499 rtmutex 修复链」，这里不再叠加单补丁
           
       - name: 应用 CVE-2026-43499 rtmutex 修复链
@@ -846,8 +852,18 @@ jobs:
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
+
+          # FinaSU 的 preinit runner 需要 $(objtree)/usr/include 的目标 UAPI 头（上游
+          # docs/builtin-integration.md 的 built-in 做法：CONFIG_HEADERS_INSTALL=y +
+          # KSU_REQUIRE_PREINIT=1）。头不在时驱动会把 preinit.o 静默排除，
+          # 而内核侧 fs/exec.c（SUSFS 50 补丁）仍在调用那两个符号 → 链接期缺定义。
+          EXTRA_MAKE_ARGS=""
+          if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]]; then
+            EXTRA_MAKE_ARGS="KSU_REQUIRE_PREINIT=1"
+          fi
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image $EXTRA_MAKE_ARGS
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
