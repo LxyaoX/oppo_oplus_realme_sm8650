@@ -34,6 +34,7 @@
 - [x] Droidspaces 容器化支持（比传统 Docker/LXC 更轻量化，便于移植的完整 Linux 环境容器实现）
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
+- [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~

@@ -75,6 +75,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      cve_2026_43499_patch:
+        description: '应用 CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链(含 scoped_guard 兼容回移; 关闭则完全不打这个补丁)'
+        required: false
+        type: boolean
+        default: 'true'
       baseband_guard:
         description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
         required: true
@@ -383,11 +388,34 @@ jobs:
           sed -i 's/check_defconfig//' ./common/build.config.gki
           #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
           echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
-          # 应用 CVE_2026_43499 修复补丁
-          cd common
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/cve-2026-43499-rtmutex-6.1.patch
-          patch -p1 -F 3 < cve-2026-43499-rtmutex-6.1.patch
+          # CVE-2026-43499 已改为独立步骤「应用 CVE-2026-43499 rtmutex 修复链」，这里不再叠加单补丁
           
+      - name: 应用 CVE-2026-43499 rtmutex 修复链
+        if: inputs.cve_2026_43499_patch
+        run: |
+          set -e
+          echo "正在应用 CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链…"
+          cd kernel_workspace
+          # 本工作流不做 checkout，按 tarball 取 security_patch/ 整个目录
+          CVE_PATCH_DIR="$(mktemp -d)"
+          curl -sSL "https://codeload.github.com/$GITHUB_REPOSITORY/tar.gz/refs/heads/$GITHUB_REF_NAME" -o "$CVE_PATCH_DIR/repo.tar.gz"
+          tar --force-local -xzf "$CVE_PATCH_DIR/repo.tar.gz" -C "$CVE_PATCH_DIR" --strip-components=2 --wildcards "*/security_patch/*"
+          rm -f "$CVE_PATCH_DIR/repo.tar.gz"
+          # tarball 根目录层级不是预期时兜底拉平，避免脚本找不到
+          if [ -d "$CVE_PATCH_DIR/security_patch" ]; then
+            mv "$CVE_PATCH_DIR/security_patch"/* "$CVE_PATCH_DIR"/
+            rmdir "$CVE_PATCH_DIR/security_patch"
+          fi
+
+          # 版本号从源码树读，避免写死；脚本内部按 SUBLEVEL 判断上游是否已含修复
+          KVER_MAJOR=$(awk '/^VERSION =/{print $3; exit}' ./common/Makefile)
+          KVER_PATCH=$(awk '/^PATCHLEVEL =/{print $3; exit}' ./common/Makefile)
+          KVER_SUB=$(awk '/^SUBLEVEL =/{print $3; exit}' ./common/Makefile)
+          echo "当前内核版本: $KVER_MAJOR.$KVER_PATCH.$KVER_SUB"
+
+          cd ./common
+          bash "$CVE_PATCH_DIR/apply_cve_2026_43499.sh" "$KVER_MAJOR.$KVER_PATCH" "$KVER_SUB" "$CVE_PATCH_DIR"
+
       - name: 启用网络功能增强优化配置
         if: inputs.better_net
         run: |

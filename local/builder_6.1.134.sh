@@ -31,6 +31,8 @@ read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
 APPLY_SSG=${APPLY_SSG:-y}
 read -p "是否启用ReKernel-X？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
+read -p "是否应用 CVE-2026-43499 rtmutex 修复链？(y/n，默认：y): " APPLY_CVE_2026_43499
+APPLY_CVE_2026_43499=${APPLY_CVE_2026_43499:-y}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 
@@ -60,6 +62,7 @@ echo "应用 BBR 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用ReKernel-X: $APPLY_REKERNEL"
+echo "应用CVE-2026-43499修复链: $APPLY_CVE_2026_43499"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "===================="
 echo
@@ -230,11 +233,32 @@ echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$DEFCONFIG_FILE"
 #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
 echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
 
-# 应用 CVE_2026_43499 修复补丁
-cd common
-wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/cve-2026-43499-rtmutex-6.1.patch
-patch -p1 -F 3 < cve-2026-43499-rtmutex-6.1.patch
-cd ..
+# ===== 应用 CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链 =====
+if [[ "$APPLY_CVE_2026_43499" != "n" && "$APPLY_CVE_2026_43499" != "N" ]]; then
+  echo ">>> 正在应用 CVE-2026-43499 rtmutex 修复链..."
+  CVE_PATCH_DIR="$SCRIPT_DIR/../security_patch"
+  if [ ! -f "$CVE_PATCH_DIR/apply_cve_2026_43499.sh" ]; then
+    echo ">>> 本地缺少 security_patch/，从仓库拉取..."
+    CVE_PATCH_DIR="$WORKDIR/.security_patch"
+    rm -rf "$CVE_PATCH_DIR"
+    mkdir -p "$CVE_PATCH_DIR"
+    curl -sSL "https://codeload.github.com/${CVE_PATCH_REPO:-LxyaoX/oppo_oplus_realme_sm8650}/tar.gz/refs/heads/main" -o "$WORKDIR/.security_patch.tar.gz"
+    tar --force-local -xzf "$WORKDIR/.security_patch.tar.gz" -C "$CVE_PATCH_DIR" --strip-components=2 --wildcards "*/security_patch/*"
+    rm -f "$WORKDIR/.security_patch.tar.gz"
+    if [ -d "$CVE_PATCH_DIR/security_patch" ]; then
+      mv "$CVE_PATCH_DIR/security_patch"/* "$CVE_PATCH_DIR"/
+      rmdir "$CVE_PATCH_DIR/security_patch"
+    fi
+  fi
+  KVER_MAJOR=$(awk '/^VERSION =/{print $3; exit}' ./common/Makefile)
+  KVER_PATCH=$(awk '/^PATCHLEVEL =/{print $3; exit}' ./common/Makefile)
+  KVER_SUB=$(awk '/^SUBLEVEL =/{print $3; exit}' ./common/Makefile)
+  echo ">>> 当前内核版本: $KVER_MAJOR.$KVER_PATCH.$KVER_SUB"
+  # 子 shell 里跑，避免 cd 影响后面的相对路径
+  ( cd ./common && bash "$CVE_PATCH_DIR/apply_cve_2026_43499.sh" "$KVER_MAJOR.$KVER_PATCH" "$KVER_SUB" "$CVE_PATCH_DIR" )
+else
+  echo ">>> 已选择跳过 CVE-2026-43499 修复链..."
+fi
 
 # 仅在启用了 LZ4KD 补丁时添加相关算法支持
 if [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
