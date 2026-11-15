@@ -33,7 +33,7 @@
 - [x] 加入一些网络功能拓展配置选项（用于为ipset及需要iptables等高级网络功能内核支持的程序提供支持）
 - [x] Droidspaces 容器化支持（比传统 Docker/LXC 更轻量化，便于移植的完整 Linux 环境容器实现）
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
-- [x] 加入Re:Kernel支持，与Freezer，NoActive等软件配合降低功耗
+- [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
