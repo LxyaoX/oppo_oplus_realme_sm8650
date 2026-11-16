@@ -277,6 +277,29 @@ if [ -d "$HOOKS_DIR" ]; then
     fi
   done < "$WORK/modified.txt"
   echo "hook 引用自愈：还原 $REVERTED 个文件"
+
+  # ---- 5) 悬空 tracepoint 导出清理 ----
+  # drivers/android/vendor_hooks.c 里每行 EXPORT_TRACEPOINT_SYMBOL_GPL(x) 都会展开成
+  # __tracepoint_x / __traceiter_x / __SCK__tp_func_x 三个引用。ACK 会给它加新 hook 的导出，
+  # 而 DECLARE_HOOK 在 include/trace/hooks/**（已排除）→ 编译直接
+  # 「use of undeclared identifier '__traceiter_android_vh_adjust_nr_reclaimed'」。
+  # 处理：删掉那些「本树没有任何 hook 头声明过」的导出行，只保留厂商真实存在的那批。
+  EXPORT_STRIPPED=0
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    grep -q 'EXPORT_TRACEPOINT_SYMBOL' "$f" || continue
+    BEFORE=$(wc -l < "$f")
+    for name in $(grep -o 'EXPORT_TRACEPOINT_SYMBOL[A-Z_]*(\([a-zA-Z0-9_]*\))' "$f" \
+                  | sed 's/.*(\(.*\))/\1/' | sort -u); do
+      grep -rq "$name" "$HOOKS_DIR" 2>/dev/null && continue
+      sed -i "/EXPORT_TRACEPOINT_SYMBOL[A-Z_]*(\($name\))/d" "$f"
+      echo "strip(export-undeclared): $f -> $name" >> "$WORK/report.txt"
+      echo "删除悬空导出: $f -> $name"
+    done
+    AFTER=$(wc -l < "$f")
+    [ "$AFTER" != "$BEFORE" ] && EXPORT_STRIPPED=$((EXPORT_STRIPPED + 1))
+  done < "$WORK/modified.txt"
+  echo "悬空 tracepoint 导出清理：$EXPORT_STRIPPED 个文件"
 fi
 
 # 统计剩余 .rej
