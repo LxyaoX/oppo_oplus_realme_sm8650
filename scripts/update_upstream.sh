@@ -29,17 +29,28 @@ command -v curl >/dev/null 2>&1 && HAVE_CURL=1
 
 auth() { [ -n "$TOKEN" ] && printf 'Authorization: token %s' "$TOKEN"; }
 
-# get <url> <out>  —— 走 curl，带重试；GitHub raw 偶尔 5xx
+# get <url> <out>  —— 走 curl，带重试。
+# 注意不要用 --retry-all-errors：鉴权失败也会被重试 5 次，一个 401 能拖掉好几分钟。
+# 也不要把 token 发给 raw.githubusercontent.com —— 那个域名不带鉴权也能取公开仓库，
+# 带上反而在某些网络下被代理拦成 401。
 get() {
   local url="$1" out="$2"
   if [ "$HAVE_CURL" = 1 ]; then
-    if [ -n "$TOKEN" ]; then
-      curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
-        -H "$(auth)" "$url" -o "$out"
-    else
-      curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
-        "$url" -o "$out"
-    fi
+    case "$url" in
+      https://api.github.com/*)
+        if [ -n "$TOKEN" ]; then
+          curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
+            -H "$(auth)" "$url" -o "$out"
+        else
+          curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
+            "$url" -o "$out"
+        fi
+        ;;
+      *)
+        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
+          "$url" -o "$out"
+        ;;
+    esac
   else
     wget -q --tries=3 --timeout=120 "$url" -O "$out"
   fi
@@ -50,7 +61,9 @@ gh_raw() {
   get "https://raw.githubusercontent.com/$1/$2/$3" "$4" 2>/dev/null && return 0
   # raw.githubusercontent 在某些网络下 TLS 失败，退 API + raw accept
   if [ -n "$TOKEN" ]; then
-    curl -fsSL --retry 3 --connect-timeout 20 --max-time 180 \
+    get "https://api.github.com/repos/$1/contents/$3?ref=$2" "$4" 2>/dev/null && return 0
+    # get() 不带 Accept: raw，这里补一次
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
       -H "$(auth)" -H "Accept: application/vnd.github.raw" \
       "https://api.github.com/repos/$1/contents/$3?ref=$2" -o "$4"
   else
@@ -157,6 +170,38 @@ printf '  %-34s %s\n' "LxyaoX/AnyKernel3@main"          "$(gh_head LxyaoX/AnyKer
 printf '  %-34s %s\n' "WildKernels/kernel_patches@main" "$(gh_head WildKernels/kernel_patches main)"
 printf '  %-34s %s\n' "cctv18/susfs4oki@oki-android14-6.1" "$(gh_head cctv18/susfs4oki oki-android14-6.1)"
 printf '  %-34s %s\n' "gitlab simonpunk/susfs4ksu@gki-android14-6.1" "$(gitlab_head simonpunk/susfs4ksu gki-android14-6.1)"
+
+# ---------------------------------------------------------------- zram 补丁版本
+# 这三个补丁都带内核侧适配，不能简单按上游 tag 覆盖：
+#   lz4  -> 去掉了 malloc/stdio，加了 wrkmem 参数、EXPORT_SYMBOL、arm64 汇编解压入口
+#   zstd -> 裁剪成 decompress-only + 内核内存接口
+#   lz4kd-> 三方补丁，按内核小版本分目录（other/zram/zram_patch/<kver>/）
+say ""
+say "== zram 相关补丁"
+ZRAM_DIR="$HERE/zram_patch"
+if [ -d "$ZRAM_DIR" ]; then
+  VERS="$(python3 "$HERE/scripts/zram_patch_versions.py" "$ZRAM_DIR")"
+  LZ4_CUR="$(printf '%s\n' "$VERS" | awk 'NR==1{print $1}')"
+  ZSTD_CUR="$(printf '%s\n' "$VERS" | awk 'NR==2{print $1}')"
+  LZ4_UP="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 ${TOKEN:+-H "$(auth)"} \
+    "https://api.github.com/repos/lz4/lz4/releases/latest" 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("tag_name","?").lstrip("v"))
+except Exception: print("?")')"
+  ZSTD_UP="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 ${TOKEN:+-H "$(auth)"} \
+    "https://api.github.com/repositories/29759715/releases/latest" 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("tag_name","?").lstrip("v"))
+except Exception: print("?")')"
+  printf '  %-10s 补丁 %-8s 上游最新 %-8s\n' "lz4"  "${LZ4_CUR:-?}"  "${LZ4_UP:-?}"
+  printf '  %-10s 补丁 %-8s 上游最新 %-8s\n' "zstd" "${ZSTD_CUR:-?}" "${ZSTD_UP:-?}"
+  printf '  %-10s 构建时 clone %-8s\n' "lz4kd" "SukiSU-Nova/SukiSU_patch@main"
+  if [ -n "$LZ4_UP" ] && [ "$LZ4_UP" != "?" ] && [ "$LZ4_CUR" != "$LZ4_UP" ]; then
+    say "  注意: lz4 上游已到 $LZ4_UP，本地补丁是 $LZ4_CUR；这个补丁带内核侧适配"
+    say "        （wrkmem / EXPORT_SYMBOL / arm64 汇编入口），换版本要重做适配再替换"
+    if [ "${ZRAM_STRICT:-0}" = "1" ]; then STALE=1; fi
+  fi
+else
+  say "  （当前目录没有 zram_patch/，跳过）"
+fi
 
 say ""
 if [ "$MODE" = "--check" ] && [ "$STALE" = 1 ]; then

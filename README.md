@@ -52,14 +52,35 @@
 | BBRv3 补丁 | `WildKernels/kernel_patches@main:common/bbrv3/` | vendored 在 `kernel_patches/net_enhance/`，由 `update_upstream.sh` 刷新 |
 | CVE-2026-43499/53163 修复链 | `LxyaoX/AnyKernel3@main:security_patch/` | vendored 在 `security_patch/`，同上刷新 |
 | FinaSU 辅助脚本 | `LxyaoX/AnyKernel3@main:scripts/` | vendored 在 `scripts/`，同上刷新 |
-| lz4kd / zram 补丁 | `SukiSU-Nova/SukiSU_patch@main` | 构建时 clone |
 | 工具链 | `cctv18/oneplus_sm8650_toolchain` LLVM-Clang20 r547379 | 构建时 aria2c 下载 |
+| lz4（zram / f2fs / incfs 用） | `lz4/lz4` v1.10.0，内核侧适配版 | vendored `zram_patch/001-lz4.patch`：**上游已到 v1.11.1，未跟进**（见下） |
+| zstd（zram 用） | `facebook/zstd` v1.5.7 | vendored `zram_patch/002-zstd.patch`，与上游最新 release 一致 |
+| lz4kd | `SukiSU-Nova/SukiSU_patch@main` `other/zram/zram_patch/<kver>/` | 构建时 clone（该文件上游最后改动 2025-05-05，未再变） |
 
 同步与自检：
 
 ```bash
 scripts/update_upstream.sh            # 刷新 vendored 补丁/脚本，并打印各组件最新 commit
 scripts/update_upstream.sh --check    # 只比对，有漂移退出 1（可挂 CI）
+```
+
+**lz4 为什么还停在 1.10.0**：仓库里这份补丁不是把上游源码贴进内核，而是做了内核侧改造——
+`LZ4_compress_default/fast/destSize` 多一个 `void *wrkmem` 参数（不在内核里 malloc）、
+全部导出加 `EXPORT_SYMBOL`、去掉 `stdlib/stdio/limits`、类型走 `<linux/types.h>`、
+再挂一个 arm64 汇编解压入口 `LZ4_arm64_decompress_safe(_partial)` 给 f2fs/incfs 用。
+上游 1.11.x 把 HC 内部（状态表分配、`LZ4_FORCE_NOINLINE`、多线程 frame API）改了一轮，
+换版本等于把上面这层适配重做一遍，并且 zram 的 `LZ4_MEM_COMPRESS` 工作区大小、
+压缩/解压往返都得在真机上验。当前 vendored 补丁与 `cctv18` 上游仓库同一份（379,987 B），
+没有现成的 1.11 内核移植可用。
+
+版本随时可查：
+
+```bash
+scripts/update_upstream.sh --check
+#   lz4        补丁 1.10.0   上游最新 1.11.1
+#   zstd       补丁 1.5.7    上游最新 1.5.7
+#   lz4kd      构建时 clone SukiSU-Nova/SukiSU_patch@main
+# ZRAM_STRICT=1 时 lz4 落后会让 --check 退出 1
 ```
 
 **为什么 SUSFS 从 GitHub 换到 GitLab**：`simonpunk/susfs4ksu` 在 GitHub 上的镜像与
