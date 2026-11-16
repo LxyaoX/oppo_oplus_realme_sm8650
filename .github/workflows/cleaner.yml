@@ -22,7 +22,7 @@ jobs:
           exit 1
       
       - name: 获取并删除所有缓存
-        uses: actions/github-script@v6
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
