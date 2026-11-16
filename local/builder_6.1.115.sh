@@ -23,12 +23,17 @@ read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APP
 APPLY_LZ4=${APPLY_LZ4:-y}
 read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
-read -p "是否启用网络功能增强优化配置？(y/n，默认：n): " APPLY_BETTERNET
-APPLY_BETTERNET=${APPLY_BETTERNET:-n}
-read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
-APPLY_BBR=${APPLY_BBR:-n}
-read -p "是否应用网络全家桶(BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS)？(y/n，默认：y): " NET_ENHANCE
-NET_ENHANCE=${NET_ENHANCE:-y}
+read -p "自定义构建时间(形如 Tue Dec  1 08:10:00 UTC 2026，留空=当前时间): " BUILD_TIME
+BUILD_TIME=${BUILD_TIME:-}
+read -p "网络功能(n=全关, b=加BBR算法+IPSet, d=BBR设默认, f=全家桶(BBRv3+Qdisc+WireGuard+CIFS), 3=全家桶+BBRv3默认，默认：f): " NET_OPT_RAW
+case "${NET_OPT_RAW:-f}" in
+  n|N) NET_OPT=none ;;
+  b|B) NET_OPT=bbr ;;
+  d|D) NET_OPT=bbr-default ;;
+  f|F) NET_OPT=full ;;
+  3)   NET_OPT=full-bbr3 ;;
+  *)   NET_OPT=full ;;
+esac
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
 read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
@@ -66,9 +71,7 @@ fi
 echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
-echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
-echo "应用 BBR 等算法: $APPLY_BBR"
-echo "网络全家桶: $NET_ENHANCE"
+echo "网络功能: $NET_OPT"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用ReKernel-X: $APPLY_REKERNEL"
@@ -299,7 +302,7 @@ EOF
 fi
 
 # ===== 启用网络功能增强优化配置 =====
-if [[ "$APPLY_BETTERNET" == "y" || "$APPLY_BETTERNET" == "Y" ]]; then
+if [[ "$NET_OPT" != "none" ]]; then
   echo ">>> 正在启用网络功能增强优化配置..."
   echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_NETFILTER_XT_SET=y" >> "$DEFCONFIG_FILE"
@@ -331,7 +334,7 @@ if [[ "$APPLY_BETTERNET" == "y" || "$APPLY_BETTERNET" == "Y" ]]; then
 fi
 
 # ===== 添加 BBR 等一系列拥塞控制算法 =====
-if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
+if [[ "$NET_OPT" != "none" ]]; then
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
@@ -341,7 +344,7 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   echo "CONFIG_TCP_CONG_WESTWOOD=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_HTCP=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BRUTAL=y" >> "$DEFCONFIG_FILE"
-  if [[ "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
+  if [[ "$NET_OPT" == "bbr-default" || "$NET_OPT" == "full-bbr3" ]]; then
     echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> "$DEFCONFIG_FILE"
   else
     echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> "$DEFCONFIG_FILE"
@@ -349,12 +352,12 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
 fi
 
 # ===== 网络全家桶：BBRv3 补丁 + IPSet/Qdisc/WireGuard/CIFS =====
-if [[ "$NET_ENHANCE" == [yY] ]]; then
-  case "$APPLY_BBR" in
-    [nN]) NET_CC=none ;;
-    [dD]) NET_CC=bbr3 ;;
-    *)    NET_CC=cubic ;;
-  esac
+if [[ "$NET_OPT" == "full" || "$NET_OPT" == "full-bbr3" ]]; then
+  if [[ "$NET_OPT" == "full-bbr3" ]]; then
+    NET_CC=bbr3
+  else
+    NET_CC=cubic
+  fi
   bash "$SCRIPT_DIR/../scripts/apply_net_enhance.sh" "$WORKDIR/kernel_workspace" android14-6.1 "$NET_CC"
 fi
 
@@ -427,6 +430,16 @@ fi
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
 
+# ===== 设置自定义构建时间 =====
+if [[ -n "$BUILD_TIME" ]]; then
+  echo ">>> 设置自定义构建时间: $BUILD_TIME"
+fi
+bash "$SCRIPT_DIR/../scripts/apply_build_time.sh" "$WORKDIR/kernel_workspace" "$BUILD_TIME"
+# 脚本进程内的 export 传不回来，source 它落的环境文件
+if [[ -f "$WORKDIR/kernel_workspace/.build_time.env" ]]; then
+  source "$WORKDIR/kernel_workspace/.build_time.env"
+fi
+
 # ===== 编译内核 =====
 echo ">>> 开始编译内核..."
 cd common
@@ -495,7 +508,7 @@ fi
 if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   ZIP_NAME="${ZIP_NAME}-kpm"
 fi
-if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
+if [[ "$NET_OPT" == "bbr" || "$NET_OPT" == "bbr-default" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbr"
 fi
 if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then

@@ -36,7 +36,8 @@
 - [x] 加入 ReKernel-X 支持（Binder / 信号 / 网络钩子），与 Freezer、NoActive 等软件配合降低功耗
 - [x] FinaSU SUSFS Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE`，内核树直调入口替代 tracepoint/dispatcher/kprobe）
 - [x] SUSFS 隐藏增强（`/proc/susfs_hide_modules` 模块名、`/proc/susfs_hide_mounts` 挂载前缀）
-- [x] 网络全家桶（BBRv3 升级 + IPSet / Qdisc / WireGuard / CIFS，从 AnyKernel3 移植）
+- [x] 网络全家桶（`net_opt` 五档：none / bbr / bbr-default / full / full-bbr3，含 BBRv3、IPSet、Qdisc、WireGuard、CIFS，从 AnyKernel3 移植）
+- [x] 自定义构建时间（`build_time`，固定 `UTS_VERSION` 与 `KBUILD_BUILD_TIMESTAMP`，从 AnyKernel3 移植）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 维护
@@ -52,7 +53,7 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 # 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
 ```
 
-补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_finasu.sh`、`security_patch/`），
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
 
 ## SUSFS Inline 后端（FinaSU）
@@ -103,7 +104,17 @@ cat /proc/susfs_hide_mounts
 命令行/模块脚本直接写即可。反过来把内核伪装成 lkm 会连累 `full_clone`、`avc_spoof` 和整个页面变只读，不做。
 
 ## 网络全家桶（BBRv3 / Qdisc / WireGuard / CIFS）
-从 AnyKernel3 移植。开关是工作流的 `net_enhance`（默认 true），本地 builder 问 `NET_ENHANCE`。
+从 AnyKernel3 移植。原来的三个开关（`bbr_enable` / `better_net` / `net_enhance`）已合并成一个 `net_opt`：
+
+| `net_opt` | BBR | IPSet + nf | Qdisc / WireGuard / CIFS | 默认拥塞控制 |
+|---|---|---|---|---|
+| `none` | — | — | — | 内核默认 |
+| `bbr` | BBR v1 | ✓ | — | `cubic` |
+| `bbr-default` | BBR v1 | ✓ | — | `bbr` |
+| `full`（默认） | BBRv3 | ✓ | ✓ | `cubic` |
+| `full-bbr3` | BBRv3 | ✓ | ✓ | `bbr3` |
+
+本地 builder 问 `网络功能(n/b/d/f/3)`，默认 `f`（full）。
 
 | 块 | 内容 | 来源 |
 |---|---|---|
@@ -114,19 +125,35 @@ cat /proc/susfs_hide_mounts
 | WireGuard | `CONFIG_WIREGUARD=y` | AnyKernel3 |
 | CIFS | `CIFS` + `XATTR` / `POSIX` + `KEYS` + `NETWORK_FILESYSTEMS` | AnyKernel3 |
 
-**BBR 版本从 v1 升到 v3**。默认拥塞控制跟随 `bbr_enable`：
-
-| `bbr_enable` | BBRv3 算法 | 默认拥塞控制 |
-|---|---|---|
-| `false` | 不打补丁、不编（走 `none`） | 内核默认（cubic） |
-| `true` | 编进去，可选 | `cubic`（原语义不变） |
-| `default` | 编进去 | **`bbr3`**（原来这里是 bbr v1） |
+**BBR 版本从 v1 升到 v3**：`full` / `full-bbr3` 会把 BBRv3 算法编进去（`TCP_CONG_BBR3=y`），
+`full-bbr3` 同时把默认算法设成 `bbr3`；`bbr` / `bbr-default` 走内核自带的 BBR v1。
 
 补丁在厂商 6.1 树上实测 `patch -p1 --dry-run` rc=0，`net/ipv4/Kconfig`、`tcp_input.c` 等若干 hunk 靠 offset/fuzz 落位（LTS 合入上游 stable 会让上下文漂移）。砸不上时降级 BBR v1 并打 `::warning`，其余配置照常写，不挂掉整个构建。
 
 与 AnyKernel3 的两点差异：
 - CIFS=y 后 AnyKernel3 要去改 `modules.bzl`（bazel 模块清单会因为 netfs.ko 被内建而校验失败）；本仓库用 `make Image`，无此清单，不用改。
 - 5.10 才需要的 `sysctl_add_proc_dou8vec_minmax` 前置补丁与 `add_tcp_snd_cwnd.py` 兼容脚本没搬：6.1 的 `include/net/tcp.h` 已有 `tcp_snd_cwnd()` accessors，厂商树实测 6 处。
+
+## 自定义构建时间
+从 AnyKernel3 移植。输入 `build_time`（默认空 = 当前时间），格式必须是 `Tue Dec  1 08:10:00 UTC 2026`：
+
+```bash
+gh workflow run "6.1.118 欧加真OKI内核快速构建" -R LxyaoX/oppo_oplus_realme_sm8650 \
+  -f build_time="Tue Dec  1 08:10:00 UTC 2026"
+```
+
+脚本 `scripts/apply_build_time.sh` 做三件事：
+
+1. 校验格式（星期与日期必须对得上，`date -d` 拒绝 2 月 30 日这类不存在的日期）
+2. 导出 `KBUILD_BUILD_TIMESTAMP` / `KBUILD_BUILD_VERSION=1`
+3. 往 `scripts/mkcompile_h` 的 heredoc 里写 `#define UTS_VERSION "#1 SMP PREEMPT <time>"`
+
+第 3 步是必须的：厂商 OKI 树的 `mkcompile_h` 把上游那段 `UTS_VERSION` 删了，只留
+`UTS_MACHINE` / `LINUX_COMPILE_BY` / `HOST` / `COMPILER`。只设 `KBUILD_BUILD_TIMESTAMP`
+的话版本串里根本没有时间，开关等于没接线。脚本检测到没有这行就补一行，已有则替换。
+
+本地 builder 问 `自定义构建时间`，脚本另落一份 `kernel_workspace/.build_time.env` 给父 shell
+`source`（脚本进程内的 `export` 传不回去）。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
