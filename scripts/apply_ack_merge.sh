@@ -73,8 +73,30 @@ git init -q --bare "$REPO" || { echo "ERROR: git init 失败" >&2; exit 1; }
 git -C "$REPO" remote add origin "$ACK_MIRROR"
 
 fetch_tag() {  # <tag> -> 本地 ref 同名
-  git -C "$REPO" fetch -q --depth 1 --filter=blob:none origin "refs/tags/$1:refs/tags/$1" 2>/dev/null \
-    || { echo "ERROR: 拉取标签失败: $1（镜像 $ACK_MIRROR）" >&2; return 1; }
+  # 镜像走公网，本机/runner 上都出现过 TLS/502 抽风；一次失败不等于标签不存在，
+  # 退避重试 4 次（5/10/15/20s），全挂才算真失败。
+  local tag="$1" i
+  for i in 1 2 3 4; do
+    if git -C "$REPO" fetch -q --depth 1 --filter=blob:none origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
+      return 0
+    fi
+    echo "拉取 $tag 第 $i 次失败，$((i * 5))s 后重试" >&2
+    sleep $((i * 5))
+  done
+  echo "ERROR: 拉取标签失败: $tag（镜像 $ACK_MIRROR）" >&2
+  return 1
+}
+
+ls_remote_asb() {  # 列 ASB 标签；空结果多半是网络，不能当成「没有标签」
+  local i out
+  for i in 1 2 3 4; do
+    out=$(git ls-remote --tags "$ACK_MIRROR" "refs/tags/ASB-*_14-6.1" 2>/dev/null) || out=""
+    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+    echo "列举 ASB 标签第 $i 次为空，$((i * 5))s 后重试" >&2
+    sleep $((i * 5))
+  done
+  echo "ERROR: 列不出 ASB 标签（镜像 $ACK_MIRROR 连不上？）" >&2
+  return 1
 }
 
 # ---- 目标标签
@@ -85,8 +107,7 @@ echo "目标标签内核版本: 6.1.${TGT_SUB:-?}"
 # ---- 选基线标签
 if [ "$MODE" = "asb" ]; then
   # 「上一份 ASB」= 标签列表里排在目标前面的那个同 KMI 标签
-  ALL_TAGS=$(git ls-remote --tags "$ACK_MIRROR" "refs/tags/ASB-*_14-6.1" 2>/dev/null \
-             | awk '{print $2}' | sed 's#refs/tags/##' | sort)
+  ALL_TAGS=$(ls_remote_asb | awk '{print $2}' | sed 's#refs/tags/##' | sort)
   BASE_TAG=$(printf '%s\n' "$ALL_TAGS" | awk -v t="$TARGET_TAG" '$0 < t {last=$0} END{print last}')
   [ -n "$BASE_TAG" ] || { echo "ERROR: 找不到 $TARGET_TAG 的上一份 ASB 标签" >&2; exit 1; }
   echo "基线标签（上一份 ASB）: $BASE_TAG"
@@ -94,8 +115,7 @@ else
   # full：按 SUBLEVEL 精确匹配厂商基线；没有就取不大于它的最近标签
   BASE_TAG=""
   EXACT=""
-  for tag in $(git ls-remote --tags "$ACK_MIRROR" "refs/tags/ASB-*_14-6.1" 2>/dev/null \
-               | awk '{print $2}' | sed 's#refs/tags/##' | sort -r | head -n 24); do
+  for tag in $(ls_remote_asb | awk '{print $2}' | sed 's#refs/tags/##' | sort -r | head -n 24); do
     git -C "$REPO" fetch -q --depth 1 --filter=blob:none origin "refs/tags/$tag:refs/tags/$tag" 2>/dev/null || continue
     s=$(git -C "$REPO" cat-file -p "$tag:Makefile" 2>/dev/null | awk '/^SUBLEVEL =/{print $3; exit}')
     [ -z "$s" ] && continue
