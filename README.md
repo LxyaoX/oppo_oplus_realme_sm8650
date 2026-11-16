@@ -39,6 +39,7 @@
 - [x] 网络全家桶（`net_opt` 五档：none / bbr / bbr-default / full / full-bbr3，含 BBRv3、IPSet、Qdisc、WireGuard、CIFS，从 AnyKernel3 移植）
 - [x] 自定义构建时间（`build_time`，固定 `UTS_VERSION` 与 `KBUILD_BUILD_TIMESTAMP`，从 AnyKernel3 移植）
 - [x] 风驰 / SCX 调度栈底座（`oplus_sched`：sched_ext + sched_assist / frame_boost / eas_opt / qos_sched）
+- [x] ACK 上游合并 + 月度 ASB 安全补丁（`ack_merge` / `ack_target`，三段式冲突处理）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 上游版本
@@ -101,7 +102,7 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 # 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
 ```
 
-补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_oplus_sched.sh`、`apply_finasu.sh`、`security_patch/`），
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_oplus_sched.sh`、`apply_ack_merge.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
 
 **runner 钉在 `ubuntu-24.04`**（`renovate.json` 里已禁掉 runner 升级）：26.04 的 clang 把
@@ -243,6 +244,39 @@ CONFIG_OPLUS_SCHED_TUNE
 源码不在 `cctv18/android_kernel_common_oneplus_sm8650` 这条 GKI 分支里，也不是一个能外挂的 KO。
 要真升上去得把 OPLUS 对应内核分支的 sched 相关改动整段合进来（会动 `task_struct` / `rq` 布局，
 KMI CRC 变，vendor 模块要一起重编）。本仓库做的是**保住底座**：让原厂那套 scx 能继续跑。
+
+## ACK 上游合并与月度安全补丁（ASB）
+从 `kernel/common`（Google ACK，android14-6.1）按 ASB 标签区间取 diff 打到厂商树上，
+默认目标 `ASB-2026-11-02_14-6.1`（2026-11 安全补丁 + 该月上游修复）。
+
+```bash
+# 换月份只改输入
+gh workflow run "6.1.141 欧加真OKI内核快速构建" -f ack_target=ASB-2026-12-01_14-6.1
+# 本地
+scripts/apply_ack_merge.sh kernel_workspace --target ASB-2026-11-02_14-6.1 --mode asb \
+  --src-zip "$RUNNER_TEMP/kernel-src.zip"
+```
+
+`--mode asb`（默认）= 上一份 ASB → 目标 ASB，即当月安全补丁；`--mode full` = 厂商基线的
+ASB 标签（按 `Makefile` 的 `SUBLEVEL` 匹配）→ 目标，会把跨越几十个 LTS 版本的改动全合进来。
+
+冲突处理三段，逐级兜底：
+
+1. 整份 diff 用 `patch -p1 -F3 -N` 打，能落的先落；
+2. 打不上的文件，若厂商树里那份与 ACK 基线**逐字节一致**（= 厂商没动过），直接用目标版本覆盖；
+3. 厂商动过的，用 `git merge-file` 做三方合并（原始厂商版本 / ACK 基线 / ACK 目标），
+   上下文漂移这类冲突在这一步自动消掉；只剩真撞车的才留报告。
+
+上游源默认走 TUNA 镜像 `mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/common`
+（`android.googlesource.com` 在部分网络下不可达），只做 blobless 浅取，一个标签几 MB。
+`ACK_STRICT=1` 时剩余冲突直接失败，默认只告警并把清单写进构建摘要。
+
+**实测**（厂商 6.1.141 树，2026-10-05 → 2026-11-02）：287 个文件 / 775 个 hunk，
+干净落盘 388 个 hunk；三方合并自动消掉 3 个文件；剩余 15 个文件是真冲突
+（`fs/f2fs/*`、`drivers/usb/*`、`drivers/android/vendor_hooks.c` 等厂商改过的热点），
+清单在 `kernel_workspace/common/.ack_merge/report.txt`。
+
+MTK 机型（115 / 128 / 134）不跑这一步：`data/builds.json` 里 `ack=false`，步骤按机型门控。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~

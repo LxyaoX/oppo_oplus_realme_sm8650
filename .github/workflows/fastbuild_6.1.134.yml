@@ -83,6 +83,16 @@ on:
         required: true
         type: boolean
         default: 'true'
+      ack_merge:
+        description: '是否合并 Google ACK（kernel/common）当月安全补丁与上游修复（ASB 标签区间；冲突自动三方合并，剩余清单写进构建摘要）'
+        required: true
+        type: boolean
+        default: 'true'
+      ack_target:
+        description: 'ACK 目标标签（默认 14-6.1 的 2026-11 ASB；改这里即换月份）'
+        required: false
+        type: string
+        default: 'ASB-2026-11-02_14-6.1'
       oplus_sched:
         description: '是否启用 OPLUS 调度栈（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched；原厂「SCX 风驰调速器」的内核侧底座，关掉则风驰模块挂不上）'
         required: true
@@ -156,7 +166,7 @@ jobs:
           aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_oneplus_mt6989/archive/refs/heads/oneplus/mt6989_b_16.0.0_ace5_race.zip -o common.zip && 
           unzip -q common.zip && 
           mv "android_kernel_oneplus_mt6989-oneplus-mt6989_b_16.0.0_ace5_race" common &&
-          rm -rf common.zip &
+          mv common.zip "$RUNNER_TEMP/kernel-src.zip" &
           
           echo "正在克隆llvm-Clang20工具链..." &&
           mkdir -p clang20 &&
@@ -284,6 +294,29 @@ jobs:
             echo "CI_SCRIPTS=$CI_ROOT/scripts"
           } >> $GITHUB_ENV
           ls "$CI_ROOT/scripts" "$CI_ROOT/security_patch"
+
+      - name: 合并 ACK 上游修复与安全补丁
+        if: ${{ inputs.ack_merge && 'false' == 'true' }}
+        run: |
+          # 源码是上一步用后台 & 下的 aria2c 拉的，先等它就位（正常几秒，超时 5 分钟）
+          for i in $(seq 1 60); do
+            [ -f "$GITHUB_WORKSPACE/kernel_workspace/common/Makefile" ] && break
+            sleep 5
+          done
+          [ -f "$GITHUB_WORKSPACE/kernel_workspace/common/Makefile" ] || { echo "::error::内核源码树未就位"; exit 1; }
+          # 直接从 ACK 的 ASB 标签区间取 diff：上一份 ASB → 目标 ASB，就是当月安全补丁；
+          # 冲突处理：整份 patch → 厂商未改动文件整份替换 → 其余三方合并，剩下才留报告
+          bash "$CI_SCRIPTS/apply_ack_merge.sh" \
+            "$GITHUB_WORKSPACE/kernel_workspace" \
+            --target "${{ github.event.inputs.ack_target }}" \
+            --mode asb \
+            --src-zip "$RUNNER_TEMP/kernel-src.zip"
+          # 冲突清单进摘要与工件，构建继续（真冲突是上游与厂商同段改动，不会影响已落盘的修复）
+          if [ -f "$GITHUB_WORKSPACE/kernel_workspace/common/.ack_merge/report.txt" ]; then
+            cp "$GITHUB_WORKSPACE/kernel_workspace/common/.ack_merge/report.txt" ./ack_merge_report.txt || true
+            echo "ACK 合并报告：" >> $GITHUB_STEP_SUMMARY
+            sed -n '1,40p' ./ack_merge_report.txt >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 设置自定义构建时间
         run: |
@@ -859,6 +892,7 @@ jobs:
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "网络: ${{ github.event.inputs.net_opt }}" >> ./ak3.log
           echo "OPLUS 调度栈(风驰底座): ${{ github.event.inputs.oplus_sched }}" >> ./ak3.log
+          echo "ACK 合并: ${{ github.event.inputs.ack_merge }} (${{ github.event.inputs.ack_target }})" >> ./ak3.log
           echo "构建时间: ${KBUILD_BUILD_TIMESTAMP:-默认}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
           echo "SSG: ${{ github.event.inputs.ssg_enable }}" >> ./ak3.log

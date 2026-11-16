@@ -40,6 +40,10 @@ read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
 APPLY_SSG=${APPLY_SSG:-y}
 read -p "是否启用 OPLUS 调度栈(sched_ext/sched_assist/frame_boost，风驰底座)？(y/n，默认：y): " APPLY_OPLUS_SCHED
 APPLY_OPLUS_SCHED=${APPLY_OPLUS_SCHED:-y}
+read -p "是否合并 ACK 当月安全补丁与上游修复？(y/n，默认：y): " APPLY_ACK_MERGE
+APPLY_ACK_MERGE=${APPLY_ACK_MERGE:-y}
+read -p "ACK 目标标签(默认 ASB-2026-11-02_14-6.1): " ACK_TARGET
+ACK_TARGET=${ACK_TARGET:-ASB-2026-11-02_14-6.1}
 read -p "是否启用ReKernel-X？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否应用 CVE-2026-43499 rtmutex 修复链？(y/n，默认：y): " APPLY_CVE_2026_43499
@@ -77,6 +81,7 @@ echo "网络功能: $NET_OPT"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用 OPLUS 调度栈: $APPLY_OPLUS_SCHED"
+echo "合并 ACK: $APPLY_ACK_MERGE ($ACK_TARGET)"
 echo "启用ReKernel-X: $APPLY_REKERNEL"
 echo "应用CVE-2026-43499修复链: $APPLY_CVE_2026_43499"
 echo "启用内核级基带保护: $APPLY_BBG"
@@ -112,6 +117,13 @@ rm -rf kernel_workspace
 mkdir kernel_workspace
 cd kernel_workspace
 git clone --depth=1 https://github.com/cctv18/android_kernel_common_oneplus_sm8650 -b oneplus/sm8650_b_16.0.0_oneplus12_6.1.141 common
+
+# ===== 合并 ACK 上游修复与当月安全补丁 =====
+if [[ "$APPLY_ACK_MERGE" == "y" || "$APPLY_ACK_MERGE" == "Y" ]]; then
+  echo ">>> 正在合并 ACK（$ACK_TARGET）..."
+  bash "$SCRIPT_DIR/../scripts/apply_ack_merge.sh" "$WORKDIR/kernel_workspace" \
+    --target "$ACK_TARGET" --mode asb || true
+fi
 echo ">>> 初始化仓库完成"
 
 # ===== 清除 abi 文件、去除 -dirty 后缀 =====

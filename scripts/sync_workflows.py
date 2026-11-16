@@ -29,13 +29,16 @@ PLACEHOLDERS = {
     "@@SRC_DIR@@": "src_dir",
     "@@DEVICE@@": "device",
     "@@BASE_MODEL@@": "base_model",
+    "@@ACK@@": "ack",
 }
 
 
 def render(template: str, entry: dict) -> str:
     out = template
     for key, field in PLACEHOLDERS.items():
-        out = out.replace(key, str(entry[field]))
+        val = entry[field]
+        # 布尔值要渲染成 yaml 的 true/false，str(True) 会变成 'True' 导致条件恒假
+        out = out.replace(key, str(val).lower() if isinstance(val, bool) else str(val))
     # BPF 流解析器：天玑机型没有这行，占位符整行删掉（含缩进），不留空行
     block_line = "          @@BPF_STREAM_PARSER_BLOCK@@\n"
     if entry.get("bpf_stream_parser"):

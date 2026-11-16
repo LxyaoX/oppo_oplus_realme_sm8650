@@ -6,7 +6,8 @@
     "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_u_14.0.0_oneplus12",
     "device": "SM8650",
     "base_model": "一加12",
-    "bpf_stream_parser": true
+    "bpf_stream_parser": true,
+    "ack": true
   },
   {
     "sub": "75",
@@ -15,7 +16,8 @@
     "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_v_15.0.0_oneplus12",
     "device": "SM8650",
     "base_model": "一加12",
-    "bpf_stream_parser": true
+    "bpf_stream_parser": true,
+    "ack": true
   },
   {
     "sub": "115",
@@ -24,7 +26,8 @@
     "src_dir": "android_kernel_oneplus_mt6989-oneplus-mt6989_v_15.0.2_ace5_race",
     "device": "MT6989",
     "base_model": "一加Ace5竞速版",
-    "bpf_stream_parser": false
+    "bpf_stream_parser": false,
+    "ack": false
   },
   {
     "sub": "118",
@@ -33,7 +36,8 @@
     "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_b_16.0.0_oneplus12",
     "device": "SM8650",
     "base_model": "一加12",
-    "bpf_stream_parser": true
+    "bpf_stream_parser": true,
+    "ack": true
   },
   {
     "sub": "128",
@@ -42,7 +46,8 @@
     "src_dir": "android_kernel_oneplus_mt6897-oneplus-mt6897_v_15.0.0_oneplus_pad",
     "device": "MT6897",
     "base_model": "一加平板",
-    "bpf_stream_parser": false
+    "bpf_stream_parser": false,
+    "ack": false
   },
   {
     "sub": "134",
@@ -51,7 +56,8 @@
     "src_dir": "android_kernel_oneplus_mt6989-oneplus-mt6989_b_16.0.0_ace5_race",
     "device": "MT6989",
     "base_model": "一加Ace5竞速板",
-    "bpf_stream_parser": false
+    "bpf_stream_parser": false,
+    "ack": false
   },
   {
     "sub": "141",
@@ -60,6 +66,7 @@
     "src_dir": "android_kernel_common_oneplus_sm8650-oneplus-sm8650_b_16.0.0_oneplus12_6.1.141",
     "device": "SM8650",
     "base_model": "一加12",
-    "bpf_stream_parser": true
+    "bpf_stream_parser": true,
+    "ack": true
   }
 ]
