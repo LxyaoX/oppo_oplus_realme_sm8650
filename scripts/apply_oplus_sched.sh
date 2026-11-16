@@ -78,6 +78,27 @@ done
 echo "OPLUS 调度栈：写入 $ADDED 个配置项"
 [ -n "$SKIPPED" ] && echo "该树未定义、已跳过：$SKIPPED"
 
+# ---- 让这族 Kconfig 真的进入 kconfig 树 ----
+# 这棵树上 kernel/Kconfig 没有 source kernel/oplus_cpu/Kconfig，kernel/Makefile 也只挂了
+# sched_tune/ 一个目录。于是往 gki_defconfig 写 CONFIG_OPLUS_FEATURE_SCHED_ASSIST=y 会被
+# kconfig 当成未知符号静默丢掉：out/.config 里根本不出现，sched_assist/ 自然不编译，
+# 「写进去了」只是 defconfig 文本里的假象。两边都补齐才生效。
+# 只 source sched/Kconfig（不 source 整个 oplus_cpu/Kconfig）：后者会连带 cpufreq_health /
+# uad / oplus_slc / oplus_game 一整片，其中不少依赖 DDK 生成物，风险远大于收益。
+KC="$KW/common/kernel/Kconfig"
+KM="$KW/common/kernel/Makefile"
+if [ -f "$KC" ]; then
+  grep -q 'source "kernel/oplus_cpu/sched/Kconfig"' "$KC" \
+    || printf '\nsource "kernel/oplus_cpu/sched/Kconfig"\n' >> "$KC"
+  echo "kernel/Kconfig 已 source sched/Kconfig"
+fi
+if [ -f "$KM" ]; then
+  # 用 PERFORMANCE_SCHED 当门（sched/Kconfig 里 default y）：它就是这族功能的开关
+  grep -q 'oplus_cpu/sched/$' "$KM" \
+    || printf '\nobj-$(CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED) += oplus_cpu/sched/\n' >> "$KM"
+  echo "kernel/Makefile 已挂 oplus_cpu/sched/"
+fi
+
 # ---- trace 头：让 make 构建也能解析 TRACE_INCLUDE_PATH ----
 # 厂商的 trace 头只在 CONFIG_OPLUS_SYSTEM_KERNEL_QCOM=y 时才把 TRACE_INCLUDE_PATH 指成 "."，
 # 否则 include/trace/define_trace.h 会去找 <trace/events/<name>.h>——那是 bazel DDK 的生成物，
