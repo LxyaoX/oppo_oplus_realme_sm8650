@@ -44,7 +44,11 @@ ACK_MIRROR="${ACK_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/c
 #                          「redefinition of trace_android_vh_...」（实测编译失败点就在这里）
 #   mm/**                  厂商 mm 补丁与 ACK 的 folio/reclaim 重构撞车；只排 vmscan.c 不够，
 #                          头文件签名变了照样编译失败（too few arguments）
-ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**}"
+#   include/linux/memcontrol.h、include/linux/swap.h
+#                          ASB-2026-11-02 这一批把 mem_cgroup_below_min()/below_low() 从 1 参改成
+#                          2 参（多一个 target_mem_cgroup），而 mm/** 已排除、mm/vmscan.c 还是 1 参
+#                          调用 → 头文件和实现代次错位，编译必然挂。头文件必须跟 mm/ 一起留在厂商版。
+ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**,include/linux/memcontrol.h,include/linux/swap.h}"
 
 # 两种布局都认：构建工作区是 <KW>/common（GKI 形态），直接解压的源码包是 <KW> 本身
 if [ -f "$KW/common/Makefile" ]; then
@@ -193,6 +197,29 @@ for f in $(awk '/^patching file /{file=$3} /FAILED/{if (file != "") {print file;
 done
 
 echo "冲突文件处理：整file替换 $REPLACED 个；三方合并 $MERGED 个；剩余真冲突 $REMAIN 个"
+
+# ---- 3) mm 代次一致性兜底 ----
+# mm/** 被排除后，厂商 mm/ 仍是 1 参 mem_cgroup_below_*()；只要头文件被 ACK 的任一 commit 换掉，
+# 编译就过不去。这里把这几份头文件无条件还原成厂商原始版本，保证「头文件 + mm/」同代次。
+# 幂等：内容一样就不写，避免无意义的时间戳抖动。
+MM_HEADERS="include/linux/memcontrol.h include/linux/swap.h"
+RESTORED=0
+for h in $MM_HEADERS; do
+  [ -f "$h" ] || continue
+  if restore_orig "$h" > "$WORK/hdr.tmp" 2>/dev/null && [ -s "$WORK/hdr.tmp" ]; then
+    if ! cmp -s "$WORK/hdr.tmp" "$h"; then
+      cp "$WORK/hdr.tmp" "$h"
+      RESTORED=$((RESTORED + 1))
+      echo "restore(vendor-mm-header): $h" >> "$WORK/report.txt"
+    fi
+  fi
+done
+echo "mm 头文件还原：$RESTORED 个"
+
+# 落盘自检：厂商树是 1 参形态时，头文件必须也是 1 参，否则 mm/vmscan.c 一定编不过
+if [ -f include/linux/memcontrol.h ] && grep -q 'mem_cgroup_below_min(struct mem_cgroup \*target' include/linux/memcontrol.h; then
+  echo "::warning title=mm 头文件代次::include/linux/memcontrol.h 是 2 参形态；若厂商 mm/vmscan.c 仍是 1 参调用会报 too few arguments"
+fi
 
 # 统计剩余 .rej
 REJS=$(find . -name '*.rej' -newer "$WORK/apply.log" 2>/dev/null | wc -l | tr -d ' ')

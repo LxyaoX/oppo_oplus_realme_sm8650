@@ -94,7 +94,7 @@ on:
         type: string
         default: 'ASB-2026-11-02_14-6.1'
       oplus_sched:
-        description: '是否写入 OPLUS 调度栈配置（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched）。注意：这支 GKI 树的 OPLUS sched 代码只由 bazel DDK 出模块，make 内建会缺 trace 头，所以这里只写 Kconfig，不编译源码'
+        description: '是否启用 OPLUS 调度栈（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched，写 defconfig 并编进内核；脚本已补 trace 头的同目录解析，可原生编译）。关掉则保持原厂 is not set'
         required: true
         type: boolean
         default: 'false'

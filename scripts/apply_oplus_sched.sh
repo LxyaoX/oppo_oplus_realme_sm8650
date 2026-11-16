@@ -78,11 +78,50 @@ done
 echo "OPLUS 调度栈：写入 $ADDED 个配置项"
 [ -n "$SKIPPED" ] && echo "该树未定义、已跳过：$SKIPPED"
 
-# 注意：不要试图把 kernel/oplus_cpu/ 挂进 make 构建。
-# 这棵树上的 sched_assist 依赖 bazel DDK 生成的 trace 头（trace/events/trace_sched_assist.h），
-# 用 make 内建会直接 fatal error: 'trace/events/trace_sched_assist.h' file not found。
-# 所以这里只写配置：原厂 ROM 的 vendor 模块（oplus_bsp_sched_ext.ko 等）加载时按 Kconfig 检查，
-# 配置对了它才愿意挂；真正的代码由 stock vendor_dlkm 提供。
+# ---- trace 头：让 make 构建也能解析 TRACE_INCLUDE_PATH ----
+# 厂商的 trace 头只在 CONFIG_OPLUS_SYSTEM_KERNEL_QCOM=y 时才把 TRACE_INCLUDE_PATH 指成 "."，
+# 否则 include/trace/define_trace.h 会去找 <trace/events/<name>.h>——那是 bazel DDK 的生成物，
+# make 构建里根本不存在，于是 fatal error: 'trace/events/trace_sched_assist.h' file not found。
+# 这里把那层 #ifdef 打开（等价于 DDK 的生成结果），让头文件在同目录自解析。
+# 只改「#ifdef CONFIG_OPLUS_SYSTEM_KERNEL_QCOM 紧跟 #define TRACE_INCLUDE_PATH」这一处，
+# 其它同名 ifdef（平台代码里的真实分支）一律不动。
+TRACE_FIXED=0
+while IFS= read -r h; do
+  [ -n "$h" ] || continue
+  grep -q 'define[[:space:]]*TRACE_INCLUDE_FILE' "$h" || continue
+  awk '
+    /^#ifdef[ \t]+CONFIG_OPLUS_SYSTEM_KERNEL_QCOM[ \t]*$/ {
+      if ((getline nxt) > 0) {
+        if (nxt ~ /^#define[ \t]+TRACE_INCLUDE_PATH/) {
+          print "#if 1 /* make 构建没有 DDK 生成的 trace 头，TRACE_INCLUDE_PATH 固定同目录 */"
+          print nxt
+          next
+        }
+        print $0
+        print nxt
+        next
+      }
+    }
+    { print }
+  ' "$h" > "$h.tmp" && mv "$h.tmp" "$h"
+  TRACE_FIXED=$((TRACE_FIXED + 1))
+done <<EOF
+$(grep -rl 'define[[:space:]]*TRACE_INCLUDE_FILE' "$KW"/common/kernel/oplus_cpu --include='*.h' 2>/dev/null)
+EOF
+echo "trace 头 TRACE_INCLUDE_PATH 解锁：$TRACE_FIXED 个"
+
+# 校验：sched_assist 的 trace 头必须已经能在同目录解析
+SA_TRACE="$KW/common/kernel/oplus_cpu/sched/sched_assist/trace_sched_assist.h"
+if [ -f "$SA_TRACE" ]; then
+  awk '/^#if 1 .*TRACE_INCLUDE_PATH/{f=1} /^#define[ \t]+TRACE_INCLUDE_PATH/{if (f) ok=1} END{exit ok?0:1}' "$SA_TRACE" \
+    || { echo "ERROR: $SA_TRACE 的 TRACE_INCLUDE_PATH 仍未解锁，sched_assist 会编不过" >&2; exit 1; }
+fi
+
+
+# 注意：这里写的是 CONFIG_OPLUS_FEATURE_SCHED_ASSIST 这一族 tristate，打开即参与 make 编译
+# （kernel/oplus_cpu/sched/Makefile 里是 obj-$(CONFIG_...)，没得选）。原先它会因为缺
+# trace/events/trace_sched_assist.h 直接编译失败，上面的 TRACE_INCLUDE_PATH 解锁就是为这个。
+# 关掉本步骤（oplus_sched=false）时这些符号保持原厂的 is not set，sched_assist 不进 make。
 
 # 落盘自检：至少这几个必须进去，否则风驰的底座就是空的
 for sym in CONFIG_SCHED_CLASS_EXT CONFIG_OPLUS_FEATURE_SCHED_ASSIST \
