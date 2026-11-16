@@ -758,6 +758,20 @@ jobs:
             exit 1
           fi
           echo "OPLUS 调度栈已编入：$(grep -c '^CONFIG_OPLUS_FEATURE_.*=y' "$CFG") 个 OPLUS_FEATURE_* 项，SCHED_CLASS_EXT=y"
+          # 配置归配置，还得看源码真的被编进去：OPLUS 那套在这棵树上只被 bazel 收走，
+          # 脚本补了两条 make 挂载，这里用目标文件 + vmlinux 字符串反证
+          OBJ="$GITHUB_WORKSPACE/kernel_workspace/common/out/kernel/oplus_cpu/sched"
+          for d in sched_assist frame_boost eas_opt qos_sched; do
+            if [ ! -d "$OBJ/$d" ]; then
+              echo "::error::OPLUS 调度栈目录没有被编译: kernel/oplus_cpu/sched/$d"
+              exit 1
+            fi
+          done
+          if ! grep -aq "hmbird_sched" "$GITHUB_WORKSPACE/kernel_workspace/common/out/vmlinux"; then
+            echo "::error::vmlinux 里没有 hmbird_sched（/proc/hmbird_sched 接口未编入）"
+            exit 1
+          fi
+          echo "OPLUS 调度栈已进 Image：sched_assist/frame_boost/eas_opt/qos_sched 目标文件齐，vmlinux 含 hmbird_sched"
 
       - name: 保存新的 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'

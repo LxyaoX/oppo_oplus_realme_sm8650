@@ -78,11 +78,44 @@ done
 echo "OPLUS 调度栈：写入 $ADDED 个配置项"
 [ -n "$SKIPPED" ] && echo "该树未定义、已跳过：$SKIPPED"
 
+# ---------- 让这些目录真正参与 make 构建 ----------
+# 这棵树上 OPLUS 的调度代码只被 bazel 的 DDK 模块规则收走（oplus_local_modules.bzl），
+# kernel/Makefile 里只有 sched_tune 一条挂载，所以光开 CONFIG_ 是不会编译任何东西的。
+# 实测：配好 CONFIG_OPLUS_FEATURE_SCHED_ASSIST=y 后，构建日志里只有
+#   CC kernel/oplus_cpu/sched/sched_tune/tune.o
+# 其余一个都没有。补两条 make 挂载，让底座真正编进 Image。
+KM="$KW/common/kernel/Makefile"
+OCM="$KW/common/kernel/oplus_cpu/Makefile"
+
+# 注意：kernel/Makefile 里已经有一行 oplus_cpu/sched/sched_tune/，
+# 不能只 grep 'oplus_cpu/'，否则会误判成已挂载
+if [ -f "$KM" ] && ! grep -qE '^obj-[^=]*\+= *oplus_cpu/$' "$KM"; then
+  {
+    echo ''
+    echo '# OPLUS 调度栈：kernel/oplus_cpu/ 参与 make 构建（上游只通过 bazel DDK 出模块）'
+    echo 'obj-$(CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED) += oplus_cpu/'
+  } >> "$KM"
+  echo "kernel/Makefile: 已挂载 oplus_cpu/"
+fi
+
+if [ -f "$OCM" ] && ! grep -q 'sched_ext/' "$OCM"; then
+  {
+    echo ''
+    echo '# 风驰/SCX 运行时接口（/proc/hmbird_sched/*）：上游是 DDK 模块 oplus_bsp_sched_ext，'
+    echo '# 这里内建一份，保证 Image 自己就能提供该接口（vendor 模块挂不上时也有）'
+    echo 'obj-$(CONFIG_SCHED_CLASS_EXT) += sched_ext/'
+  } >> "$OCM"
+  echo "kernel/oplus_cpu/Makefile: 已挂载 sched_ext/（hmbird proc 接口）"
+fi
+
 # 落盘自检：至少这几个必须进去，否则风驰的底座就是空的
 for sym in CONFIG_SCHED_CLASS_EXT CONFIG_OPLUS_FEATURE_SCHED_ASSIST \
            CONFIG_OPLUS_FEATURE_FRAME_BOOST CONFIG_OPLUS_FEATURE_EAS_OPT; do
   grep -qx "$sym=y" "$DC" || { echo "ERROR: defconfig 缺 $sym=y" >&2; exit 1; }
 done
+
+grep -qE '^obj-[^=]*\+= *oplus_cpu/$' "$KM" || { echo "ERROR: kernel/Makefile 缺 oplus_cpu/ 挂载" >&2; exit 1; }
+grep -q 'sched_ext/' "$OCM" || { echo "ERROR: kernel/oplus_cpu/Makefile 缺 sched_ext/ 挂载" >&2; exit 1; }
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
