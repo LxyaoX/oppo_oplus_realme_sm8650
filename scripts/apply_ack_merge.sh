@@ -48,7 +48,10 @@ ACK_MIRROR="${ACK_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/c
 #                          ASB-2026-11-02 这一批把 mem_cgroup_below_min()/below_low() 从 1 参改成
 #                          2 参（多一个 target_mem_cgroup），而 mm/** 已排除、mm/vmscan.c 还是 1 参
 #                          调用 → 头文件和实现代次错位，编译必然挂。头文件必须跟 mm/ 一起留在厂商版。
-ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**,include/linux/memcontrol.h,include/linux/swap.h}"
+#   fs/f2fs/**             OPLUS 的 f2fs 带自己一套 f2fs_lock_context / f2fs_*_write_trace()；
+#                          ACK 的 gc.c 补丁假设 f2fs.h 是新版签名，打上去直接
+#                          「incomplete type 'struct f2fs_lock_context'」+ 两个 undeclared function
+ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**,include/linux/memcontrol.h,include/linux/swap.h,fs/f2fs/**}"
 
 # 两种布局都认：构建工作区是 <KW>/common（GKI 形态），直接解压的源码包是 <KW> 本身
 if [ -f "$KW/common/Makefile" ]; then
@@ -219,6 +222,41 @@ echo "mm 头文件还原：$RESTORED 个"
 # 落盘自检：厂商树是 1 参形态时，头文件必须也是 1 参，否则 mm/vmscan.c 一定编不过
 if [ -f include/linux/memcontrol.h ] && grep -q 'mem_cgroup_below_min(struct mem_cgroup \*target' include/linux/memcontrol.h; then
   echo "::warning title=mm 头文件代次::include/linux/memcontrol.h 是 2 参形态；若厂商 mm/vmscan.c 仍是 1 参调用会报 too few arguments"
+fi
+
+# ---- 4) android_vh hook 引用自愈 ----
+# ACK 的补丁会往文件里插 trace_android_vh_xxx() 调用，而声明在 include/trace/hooks/**——
+# 那一片被整体排除（厂商自己的 hook 集合与 ACK 撞名，会 redefinition）。
+# 结果就是 drivers/dma-buf/dma-buf.c:115: call to undeclared function 'trace_android_vh_dma_buf_release'。
+# 处理：凡是「被 ACK 改过、又引用了本树没有声明的 hook」的文件，整份还原成厂商版本。
+# 代价是少一两个 ASB 修复，收益是构建不会因为一个 hook 端掉整棵树。
+HOOKS_DIR=include/trace/hooks
+if [ -d "$HOOKS_DIR" ]; then
+  # 改动过的文件 = patch 打进去的 + 整份替换/三方合并的
+  {
+    awk '/^patching file /{print $3}' "$LOG"
+    awk -F': ' '/^(merged|replaced|restore)\(/{print $2}' "$WORK/report.txt"
+  } | sort -u > "$WORK/modified.txt"
+  REVERTED=0
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    grep -qo 'trace_android_vh_[a-zA-Z0-9_]*' "$f" || continue
+    MISS=""
+    for h in $(grep -o 'trace_android_vh_[a-zA-Z0-9_]*' "$f" | sort -u); do
+      grep -rq "$h" "$HOOKS_DIR" 2>/dev/null || MISS="$MISS $h"
+    done
+    [ -n "$MISS" ] || continue
+    if restore_orig "$f" > "$WORK/rev.tmp" 2>/dev/null && [ -s "$WORK/rev.tmp" ]; then
+      cp "$WORK/rev.tmp" "$f"
+      rm -f "$f.rej" 2>/dev/null
+      REVERTED=$((REVERTED + 1))
+      echo "revert(hook-undeclared): $f ->$MISS" >> "$WORK/report.txt"
+      echo "还原(缺 hook 声明): $f$MISS"
+    else
+      echo "::warning title=ACK hook 冲突::$f 引用了未声明的 hook（$MISS），且拿不到原始版本，可能编译失败"
+    fi
+  done < "$WORK/modified.txt"
+  echo "hook 引用自愈：还原 $REVERTED 个文件"
 fi
 
 # 统计剩余 .rej
