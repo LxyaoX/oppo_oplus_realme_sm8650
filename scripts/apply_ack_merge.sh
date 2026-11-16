@@ -39,6 +39,12 @@ while [ $# -gt 0 ]; do
 done
 ACK_MIRROR="${ACK_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/common}"
 
+# 默认排除厂商重改过的热点：
+#   include/trace/hooks/*  厂商自己加了一批 android_vh_* hook，ACK 的同类 DECLARE_HOOK 会撞成
+#                          「redefinition of trace_android_vh_...」（实测编译失败点就在这里）
+#   mm/vmscan.c            厂商 mm 补丁与 ACK 的 folio/reclaim 重构撞车（undeclared identifier）
+ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/vmscan.c}"
+
 # 两种布局都认：构建工作区是 <KW>/common（GKI 形态），直接解压的源码包是 <KW> 本身
 if [ -f "$KW/common/Makefile" ]; then
   COMMON="$KW/common"
@@ -98,7 +104,17 @@ fetch_tag "$BASE_TAG" || exit 1
 # ---- 生成 diff（blob 按需拉取）
 DIFF="$WORK/ack.diff"
 echo "生成 diff: $BASE_TAG -> $TARGET_TAG"
-git -C "$REPO" diff --no-renames "$BASE_TAG" "$TARGET_TAG" > "$DIFF" 2>"$WORK/diff.err" || {
+EXCL_ARGS=""
+if [ -n "$ACK_EXCLUDE" ]; then
+  OLDIFS=$IFS; IFS=','
+  for pat in $ACK_EXCLUDE; do
+    [ -n "$pat" ] && EXCL_ARGS="$EXCL_ARGS :(exclude,glob)$pat"
+  done
+  IFS=$OLDIFS
+  echo "跳过路径: $ACK_EXCLUDE"
+fi
+# shellcheck disable=SC2086
+git -C "$REPO" diff --no-renames "$BASE_TAG" "$TARGET_TAG" -- . $EXCL_ARGS > "$DIFF" 2>"$WORK/diff.err" || {
   echo "ERROR: git diff 失败" >&2; cat "$WORK/diff.err" >&2; exit 1; }
 FILES=$(grep -c '^diff --git' "$DIFF" || true)
 HUNKS=$(grep -c '^@@' "$DIFF" || true)
