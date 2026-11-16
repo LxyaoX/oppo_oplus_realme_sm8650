@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "runner 镜像钉在 ubuntu-24.04：26.04 的 clang 会把内核 tools/ 老代码的警告变成 -Werror 错误（libbpf strchr 等），要升先把 tools 兼容性跑通",
+      "matchDatasources": ["github-runners"],
+      "matchPackageNames": ["ubuntu"],
+      "enabled": false
+    }
+  ]
+}

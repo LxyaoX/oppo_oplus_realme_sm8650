@@ -441,6 +441,9 @@ if [[ -f "$WORKDIR/kernel_workspace/.build_time.env" ]]; then
   source "$WORKDIR/kernel_workspace/.build_time.env"
 fi
 
+# ===== 工具链兼容补丁 =====
+bash "$SCRIPT_DIR/../scripts/patch_toolchain_compat.sh" "$WORKDIR/kernel_workspace"
+
 # ===== 编译内核 =====
 echo ">>> 开始编译内核..."
 cd common

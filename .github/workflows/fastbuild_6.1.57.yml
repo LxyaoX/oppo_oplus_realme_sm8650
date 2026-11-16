@@ -116,7 +116,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     outputs:
       ksuver: ${{ steps.ksu_version.outputs.ksuver }}
       ak3name: ${{ steps.create_zip.outputs.ak3name }}
@@ -287,6 +287,12 @@ jobs:
           bash "$CI_SCRIPTS/apply_build_time.sh" \
             "$GITHUB_WORKSPACE/kernel_workspace" \
             "${{ github.event.inputs.build_time }}"
+
+      - name: 工具链兼容补丁
+        run: |
+          # 新 clang 对 tools/ 下老代码的 -Werror 更严（libbpf 的 strchr 强转）；
+          # 命中才改，改不上一律跳过，不阻塞构建
+          bash "$CI_SCRIPTS/patch_toolchain_compat.sh" "$GITHUB_WORKSPACE/kernel_workspace"
 
       - name: 添加KernelSU
         id: ksu_version
@@ -834,7 +840,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: write

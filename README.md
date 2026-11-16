@@ -56,6 +56,12 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
 
+**runner 钉在 `ubuntu-24.04`**（`renovate.json` 里已禁掉 runner 升级）：26.04 的 clang 把
+`tools/lib/bpf/libbpf.c` 等老代码的 `-Wincompatible-pointer-types-discards-qualifiers`
+当成错误（libbpf 的 Makefile 硬写 `override CFLAGS += -Werror`，`EXTRA_CFLAGS` 压不住），
+构建会挂在 `tools/bpf/resolve_btfids`。`scripts/patch_toolchain_compat.sh` 已经修了已知那处，
+真要升 runner 先把 tools 全量编译跑一遍。
+
 ## SUSFS Inline 后端（FinaSU）
 `ksu_type=finasu` 且开启 susfs 时，默认走 FinaSU 的 Inline 后端（`CONFIG_KSU_HOOK_SUSFS_INLINE=y`）：syscall 由内核树里的直调入口处理，不注册通用 sys_enter tracepoint、dispatcher 和替换式 kprobe。开关是工作流的 `susfs_inline` 输入（本地 builder 问 `USE_SUSFS_INLINE`），关掉即回到 FinaSU 默认的 Tracepoint 后端。
 
