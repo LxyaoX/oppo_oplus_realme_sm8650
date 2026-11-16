@@ -51,7 +51,11 @@ ACK_MIRROR="${ACK_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/c
 #   fs/f2fs/**             OPLUS 的 f2fs 带自己一套 f2fs_lock_context / f2fs_*_write_trace()；
 #                          ACK 的 gc.c 补丁假设 f2fs.h 是新版签名，打上去直接
 #                          「incomplete type 'struct f2fs_lock_context'」+ 两个 undeclared function
-ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**,include/linux/memcontrol.h,include/linux/swap.h,fs/f2fs/**}"
+#   kernel/softirq.c       ASB 里的 RT-softirq 改动调用 local_rt_runnable()，而这个符号在 ACK 的
+#                          kernel/sched/core.c 里；厂商 sched 没有它 → 全树编完、链接时
+#                          「undefined symbol: local_rt_runnable」。厂商自己那套
+#                          CONFIG_RT_SOFTIRQ_AWARE_SCHED（用 rt_task(current)）保留即可。
+ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**,include/linux/memcontrol.h,include/linux/swap.h,fs/f2fs/**,kernel/softirq.c}"
 
 # 两种布局都认：构建工作区是 <KW>/common（GKI 形态），直接解压的源码包是 <KW> 本身
 if [ -f "$KW/common/Makefile" ]; then
