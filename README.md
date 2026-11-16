@@ -38,6 +38,7 @@
 - [x] SUSFS 隐藏增强（`/proc/susfs_hide_modules` 模块名、`/proc/susfs_hide_mounts` 挂载前缀）
 - [x] 网络全家桶（`net_opt` 五档：none / bbr / bbr-default / full / full-bbr3，含 BBRv3、IPSet、Qdisc、WireGuard、CIFS，从 AnyKernel3 移植）
 - [x] 自定义构建时间（`build_time`，固定 `UTS_VERSION` 与 `KBUILD_BUILD_TIMESTAMP`，从 AnyKernel3 移植）
+- [x] 风驰 / SCX 调度栈底座（`oplus_sched`：sched_ext + sched_assist / frame_boost / eas_opt / qos_sched）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
 ## 上游版本
@@ -100,7 +101,7 @@ python3 scripts/sync_workflows.py --check    # 只校验有没有漂移，漂移
 # 新增一个内核小版本：往 data/builds.json 加一条，跑一次 sync
 ```
 
-补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_finasu.sh`、`security_patch/`），
+补丁/集成逻辑在 `scripts/`（`apply_rekernel_x.sh`、`apply_susfs.sh`、`apply_susfs_inline.sh`、`apply_susfs_hide.sh`、`apply_net_enhance.sh`、`apply_build_time.sh`、`apply_oplus_sched.sh`、`apply_finasu.sh`、`security_patch/`），
 CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内联重写。
 
 **runner 钉在 `ubuntu-24.04`**（`renovate.json` 里已禁掉 runner 升级）：26.04 的 clang 把
@@ -207,6 +208,41 @@ gh workflow run "6.1.118 欧加真OKI内核快速构建" -R LxyaoX/oppo_oplus_re
 
 本地 builder 问 `自定义构建时间`，脚本另落一份 `kernel_workspace/.build_time.env` 给父 shell
 `source`（脚本进程内的 `export` 传不回去）。
+
+## 风驰 / SCX 调度栈（OPLUS sched stack）
+原厂 Rom 里能看到的「SCX / 风驰调速器」在这棵树上分两层：
+
+| 层 | 位置 | 谁提供 |
+|---|---|---|
+| 内核侧底座 | `CONFIG_SCHED_CLASS_EXT` + `kernel/oplus_cpu/sched/{sched_assist,frame_boost,eas_opt,qos_sched,...}` | 本仓库构建时写进 defconfig |
+| 运行时接口 | `/proc/hmbird_sched/*`（`scx_enable`、`stats`、频率窗口等） | vendor 模块 `oplus_bsp_sched_ext.ko`（DDK 模块，`kernel/oplus_cpu/sched_ext/main.c`，随 vendor_dlkm 分发） |
+
+`gki_defconfig` 只带了 `CONFIG_OPLUS_SCHED_TUNE=y`，OPLUS 那套调度功能在
+`kernel/oplus_cpu/sched/Kconfig` 里全是 `tristate` + `default n`，所以 `make gki_defconfig`
+出来的 `.config` 是 `# CONFIG_OPLUS_FEATURE_SCHED_ASSIST is not set` —— Image 里没有
+`sched_assist` 钩子，vendor 的 `oplus_bsp_sched_ext.ko` 就挂不上，界面上的风驰调速器消失。
+
+`scripts/apply_oplus_sched.sh` 把底座补齐（幂等，只写树里真实存在的符号）：
+
+```
+CONFIG_SCHED_CLASS_EXT
+CONFIG_OPLUS_FEATURE_SCHED_ASSIST
+CONFIG_OPLUS_FEATURE_TASK_SCHED / TASK_LOAD / TASK_CPUSTATS
+CONFIG_OPLUS_FEATURE_CPU_JANKINFO / OPLUS_PERF_SCHEDINFO
+CONFIG_OPLUS_FEATURE_FRAME_BOOST / EAS_OPT / QOS_SCHED
+CONFIG_OPLUS_FEATURE_LOADBALANCE / PIPELINE / SCHED_SPREAD / TICK_GRAN
+CONFIG_OPLUS_SCHED_TUNE
+```
+
+工作流开关 `oplus_sched`（默认 true），本地 builder 问 `APPLY_OPLUS_SCHED`。
+构建收尾有一步「校验 OPLUS 调度栈已编入」：直接 grep `out/.config`，缺一项就 `::error`
+失败——kconfig 依赖不满足时会把这些符号**静默降级**成 `not set`，只看构建成功是发现不了的。
+
+**升到 HMBIRD II（二代风驰）**：那套东西是 OPLUS 在自家内核里改的 sched_ext 调度类
+（`/proc/hmbird_sched` + `task_struct` 扩展 + sched_assist/frame_boost/UAG 一起改），
+源码不在 `cctv18/android_kernel_common_oneplus_sm8650` 这条 GKI 分支里，也不是一个能外挂的 KO。
+要真升上去得把 OPLUS 对应内核分支的 sched 相关改动整段合进来（会动 `task_struct` / `rq` 布局，
+KMI CRC 变，vendor 模块要一起重编）。本仓库做的是**保住底座**：让原厂那套 scx 能继续跑。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~

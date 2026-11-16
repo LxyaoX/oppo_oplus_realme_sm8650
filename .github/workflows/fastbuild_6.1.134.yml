@@ -83,6 +83,11 @@ on:
         required: true
         type: boolean
         default: 'true'
+      oplus_sched:
+        description: '是否启用 OPLUS 调度栈（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched；原厂「SCX 风驰调速器」的内核侧底座，关掉则风驰模块挂不上）'
+        required: true
+        type: boolean
+        default: 'true'
       rekernel_enable:
         description: '是否启用ReKernel-X支持(与Freezer/NoActive等软件配合, 提升应用冻结能力)'
         required: true
@@ -603,6 +608,13 @@ jobs:
           echo "CONFIG_MQ_IOSCHED_SSG=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> ./common/arch/arm64/configs/gki_defconfig
 
+      - name: 启用 OPLUS 调度栈（风驰 SCX 底座）
+        if: inputs.oplus_sched
+        run: |
+          # gki_defconfig 只带 OPLUS_SCHED_TUNE，OPLUS 那套 sched 功能全 default n；
+          # 不补这一步，Image 里没有 sched_assist 钩子，ROM 的 oplus_bsp_sched_ext.ko 挂不上
+          bash "$CI_SCRIPTS/apply_oplus_sched.sh" "$GITHUB_WORKSPACE/kernel_workspace"
+
       - name: 启用 ReKernel-X 支持
         if: inputs.rekernel_enable
         run: |
@@ -730,6 +742,23 @@ jobs:
           echo "编译后空间:"
           df -h
 
+      - name: 校验 OPLUS 调度栈已编入
+        if: inputs.oplus_sched
+        run: |
+          CFG="$GITHUB_WORKSPACE/kernel_workspace/common/out/.config"
+          miss=""
+          for s in CONFIG_SCHED_CLASS_EXT CONFIG_OPLUS_FEATURE_SCHED_ASSIST \
+                   CONFIG_OPLUS_FEATURE_FRAME_BOOST CONFIG_OPLUS_FEATURE_EAS_OPT \
+                   CONFIG_OPLUS_FEATURE_QOS_SCHED CONFIG_OPLUS_FEATURE_TASK_SCHED; do
+            grep -qx "$s=y" "$CFG" || miss="$miss $s"
+          done
+          if [ -n "$miss" ]; then
+            echo "::error::OPLUS 调度栈未编入:$miss（kconfig 依赖不满足会被静默降级成 not set）"
+            grep -n "OPLUS_FEATURE\|SCHED_CLASS_EXT" "$CFG" | head -30 || true
+            exit 1
+          fi
+          echo "OPLUS 调度栈已编入：$(grep -c '^CONFIG_OPLUS_FEATURE_.*=y' "$CFG") 个 OPLUS_FEATURE_* 项，SCHED_CLASS_EXT=y"
+
       - name: 保存新的 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -815,6 +844,7 @@ jobs:
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "网络: ${{ github.event.inputs.net_opt }}" >> ./ak3.log
+          echo "OPLUS 调度栈(风驰底座): ${{ github.event.inputs.oplus_sched }}" >> ./ak3.log
           echo "构建时间: ${KBUILD_BUILD_TIMESTAMP:-默认}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
           echo "SSG: ${{ github.event.inputs.ssg_enable }}" >> ./ak3.log

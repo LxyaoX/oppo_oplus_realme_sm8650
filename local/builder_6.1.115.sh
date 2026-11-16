@@ -38,6 +38,8 @@ read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默�
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
 read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
 APPLY_SSG=${APPLY_SSG:-y}
+read -p "是否启用 OPLUS 调度栈(sched_ext/sched_assist/frame_boost，风驰底座)？(y/n，默认：y): " APPLY_OPLUS_SCHED
+APPLY_OPLUS_SCHED=${APPLY_OPLUS_SCHED:-y}
 read -p "是否启用ReKernel-X？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否应用 CVE-2026-43499 rtmutex 修复链？(y/n，默认：y): " APPLY_CVE_2026_43499
@@ -74,6 +76,7 @@ echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "网络功能: $NET_OPT"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
+echo "启用 OPLUS 调度栈: $APPLY_OPLUS_SCHED"
 echo "启用ReKernel-X: $APPLY_REKERNEL"
 echo "应用CVE-2026-43499修复链: $APPLY_CVE_2026_43499"
 echo "启用内核级基带保护: $APPLY_BBG"
@@ -412,6 +415,12 @@ if [[ "$APPLY_SSG" == "y" || "$APPLY_SSG" == "Y" ]]; then
   echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$DEFCONFIG_FILE"
 fi
 
+# ===== 启用 OPLUS 调度栈（风驰 SCX 底座） =====
+if [[ "$APPLY_OPLUS_SCHED" == "y" || "$APPLY_OPLUS_SCHED" == "Y" ]]; then
+  echo ">>> 正在启用 OPLUS 调度栈（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched）..."
+  bash "$SCRIPT_DIR/../scripts/apply_oplus_sched.sh" "$WORKDIR/kernel_workspace"
+fi
+
 # ===== 启用 ReKernel-X =====
 if [[ "$APPLY_REKERNEL" == "y" || "$APPLY_REKERNEL" == "Y" ]]; then
   bash "$SCRIPT_DIR/../scripts/apply_rekernel_x.sh" "$WORKDIR/kernel_workspace"
@@ -457,6 +466,22 @@ if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
 fi
 
 make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error all $EXTRA_MAKE_ARGS
+
+# ===== 校验 OPLUS 调度栈已编入（kconfig 依赖不满足会静默降级） =====
+if [[ "$APPLY_OPLUS_SCHED" == "y" || "$APPLY_OPLUS_SCHED" == "Y" ]]; then
+  OPLUS_MISS=""
+  for sym in CONFIG_SCHED_CLASS_EXT CONFIG_OPLUS_FEATURE_SCHED_ASSIST \
+             CONFIG_OPLUS_FEATURE_FRAME_BOOST CONFIG_OPLUS_FEATURE_EAS_OPT \
+             CONFIG_OPLUS_FEATURE_QOS_SCHED CONFIG_OPLUS_FEATURE_TASK_SCHED; do
+    grep -qx "$sym=y" ./out/.config 2>/dev/null || OPLUS_MISS="$OPLUS_MISS $sym"
+  done
+  if [[ -n "$OPLUS_MISS" ]]; then
+    echo "[ERROR] OPLUS 调度栈未编入:$OPLUS_MISS" >&2
+    exit 1
+  fi
+  echo ">>> OPLUS 调度栈已编入: $(grep -c '^CONFIG_OPLUS_FEATURE_.*=y' ./out/.config) 个 OPLUS_FEATURE_* 项"
+fi
+
 echo ">>> 内核编译成功！"
 
 # ===== 选择使用 patch_linux (KPM补丁)=====
