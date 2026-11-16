@@ -40,6 +40,32 @@
 - [x] 自定义构建时间（`build_time`，固定 `UTS_VERSION` 与 `KBUILD_BUILD_TIMESTAMP`，从 AnyKernel3 移植）
 - [x] CVE-2026-43499 / CVE-2026-53163 rtmutex 修复链（从 AnyKernel3 移植，含 scoped_guard 兼容回移，工作流与本地脚本均可开关）
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
+## 上游版本
+所有外部组件都跟上游最新走，没有手工锁版本的地方：
+
+| 组件 | 来源 | 取用方式 |
+|---|---|---|
+| ReKernel-X | `myflavor/ReKernel-X@main` | 构建时 `git clone --depth 1`（`apply_rekernel_x.sh`） |
+| FinaSU | `LyraVoid/FinaSU@master` | 构建时全量 clone（版本号 = `30000 + git rev-list --count HEAD`，浅克隆会算错） |
+| SUSFS（finasu） | `gitlab.com/simonpunk/susfs4ksu@gki-android14-6.1` | 构建时 clone；`SUSFS_PIN=<sha>` 可临时钉版本 |
+| SUSFS（其它变体） | `cctv18/susfs4oki@oki-android14-6.1` | 构建时 clone |
+| BBRv3 补丁 | `WildKernels/kernel_patches@main:common/bbrv3/` | vendored 在 `kernel_patches/net_enhance/`，由 `update_upstream.sh` 刷新 |
+| CVE-2026-43499/53163 修复链 | `LxyaoX/AnyKernel3@main:security_patch/` | vendored 在 `security_patch/`，同上刷新 |
+| FinaSU 辅助脚本 | `LxyaoX/AnyKernel3@main:scripts/` | vendored 在 `scripts/`，同上刷新 |
+| lz4kd / zram 补丁 | `SukiSU-Nova/SukiSU_patch@main` | 构建时 clone |
+| 工具链 | `cctv18/oneplus_sm8650_toolchain` LLVM-Clang20 r547379 | 构建时 aria2c 下载 |
+
+同步与自检：
+
+```bash
+scripts/update_upstream.sh            # 刷新 vendored 补丁/脚本，并打印各组件最新 commit
+scripts/update_upstream.sh --check    # 只比对，有漂移退出 1（可挂 CI）
+```
+
+**为什么 SUSFS 从 GitHub 换到 GitLab**：`simonpunk/susfs4ksu` 在 GitHub 上的镜像与
+`ShirkNeko/susfs4ksu` 分叉都已删除（API 返回 404），只剩 GitLab 本体。`apply_susfs.sh`
+因此改为 GitLab clone，并保留归档包兜底（git 走不通时退 tar.gz）。
+
 ## 维护
 工作流是按版本参数生成的，**不要手改 `.github/workflows/fastbuild_6.1.*.yml`**（7 份只差版本号/源码包/机型，手改必漂移）：
 
@@ -69,7 +95,7 @@ CI 与本地 `local/builder_*.sh` 调的是同一份，不要在 workflow 里内
 
 | 环节 | 谁提供 | 缺了会怎样 |
 |---|---|---|
-| 内核树 12 个 `ksu_handle_*` 调用点 | `scripts/apply_susfs.sh`（ShirkNeko 50 补丁，`#ifdef CONFIG_KSU_SUSFS` 包裹） | 链接期 undefined symbol |
+| 内核树 12 个 `ksu_handle_*` 调用点 | `scripts/apply_susfs.sh`（gitlab `simonpunk/susfs4ksu` 的 50 补丁，`#ifdef CONFIG_KSU_SUSFS` 包裹） | 链接期 undefined symbol |
 | 驱动侧同名入口 | FinaSU `kernel/extension/susfs.c`（`CONFIG_KSU_HOOK_SUSFS_INLINE` 分支） | 同上 |
 | `KSU_SUSFS=y` + `KSU=y` | `scripts/apply_susfs_inline.sh` 兜底 | kconfig 把 inline 静默降级成 not set，后端实际还是 tracepoint |
 | preinit 头文件 | `CONFIG_HEADERS_INSTALL=y`（finasu 自动改写） | `fs/exec.c` 的两个 preinit 入口缺失，检查直接失败 |
@@ -173,8 +199,8 @@ gh workflow run "6.1.118 欧加真OKI内核快速构建" -R LxyaoX/oppo_oplus_re
 ## 鸣谢
 - ReSukiSU：[ReSukiSU/ReSukiSU](https://github.com/ReSukiSU/ReSukiSU)
 - Sukisu Ultra：[SukiSU-Ultra/SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra)
-- susfs4ksu：[ShirkNeko/susfs4ksu](https://github.com/ShirkNeko/susfs4ksu)
-- SukiSU内核补丁：[SukiSU-Ultra/SukiSU_patch](https://github.com/SukiSU-Ultra/SukiSU_patch)
+- susfs4ksu：[simonpunk/susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)（GitHub 上的镜像/分叉已删除，统一走 GitLab 本体）
+- SukiSU内核补丁：[SukiSU-Nova/SukiSU_patch](https://github.com/SukiSU-Nova/SukiSU_patch)（原 SukiSU-Ultra/ShirkNeko 仓库已迁移）
 - pershoot维护的KernelSU Next分支：[pershoot/KernelSU-Next](https://github.com/pershoot/KernelSU-Next)
 - 手动钩子等补丁：[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)
 - 原版KernelSU: [tiann/KernelSU](https://github.com/tiann/KernelSU)

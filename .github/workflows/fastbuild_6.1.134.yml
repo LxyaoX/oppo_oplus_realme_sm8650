@@ -344,7 +344,7 @@ jobs:
         if: inputs.susfs_enable
         run: |
           # 补丁代次选择、OKI 树 hunk 兜底、落盘自检都在脚本里；
-          # finasu 走 ShirkNeko/susfs4ksu 的新代次，其余走 cctv18/susfs4oki
+          # finasu 走 gitlab.com/simonpunk/susfs4ksu 的新代次（GitHub 镜像已删），其余走 cctv18/susfs4oki
           bash "$CI_SCRIPTS/apply_susfs.sh" \
             "$GITHUB_WORKSPACE/kernel_workspace" \
             "${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}" \
@@ -369,7 +369,7 @@ jobs:
           echo "正在添加lz4kd补丁…"
           cd kernel_workspace
           if [ ! -d "SukiSU_patch" ]; then
-            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+            git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU_patch.git
           fi
           cd common
           cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/

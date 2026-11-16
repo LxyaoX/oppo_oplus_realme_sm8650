@@ -200,7 +200,7 @@ fi
 if [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
   echo ">>> 应用 LZ4KD 补丁..."
   if [ ! -d "SukiSU_patch" ]; then
-    git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+    git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU_patch.git
   fi
   cp -r ./SukiSU_patch/other/zram/lz4k/include/linux/* ./common/include/linux/
   cp -r ./SukiSU_patch/other/zram/lz4k/lib/* ./common/lib
