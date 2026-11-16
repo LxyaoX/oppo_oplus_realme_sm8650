@@ -94,10 +94,10 @@ on:
         type: string
         default: 'ASB-2026-11-02_14-6.1'
       oplus_sched:
-        description: '是否启用 OPLUS 调度栈（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched；原厂「SCX 风驰调速器」的内核侧底座，关掉则风驰模块挂不上）'
+        description: '是否写入 OPLUS 调度栈配置（sched_ext + sched_assist / frame_boost / eas_opt / qos_sched）。注意：这支 GKI 树的 OPLUS sched 代码只由 bazel DDK 出模块，make 内建会缺 trace 头，所以这里只写 Kconfig，不编译源码'
         required: true
         type: boolean
-        default: 'true'
+        default: 'false'
       rekernel_enable:
         description: '是否启用ReKernel-X支持(与Freezer/NoActive等软件配合, 提升应用冻结能力)'
         required: true

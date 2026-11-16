@@ -42,8 +42,9 @@ ACK_MIRROR="${ACK_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/kernel/c
 # 默认排除厂商重改过的热点：
 #   include/trace/hooks/*  厂商自己加了一批 android_vh_* hook，ACK 的同类 DECLARE_HOOK 会撞成
 #                          「redefinition of trace_android_vh_...」（实测编译失败点就在这里）
-#   mm/vmscan.c            厂商 mm 补丁与 ACK 的 folio/reclaim 重构撞车（undeclared identifier）
-ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/vmscan.c}"
+#   mm/**                  厂商 mm 补丁与 ACK 的 folio/reclaim 重构撞车；只排 vmscan.c 不够，
+#                          头文件签名变了照样编译失败（too few arguments）
+ACK_EXCLUDE="${ACK_EXCLUDE-include/trace/hooks/**,mm/**}"
 
 # 两种布局都认：构建工作区是 <KW>/common（GKI 形态），直接解压的源码包是 <KW> 本身
 if [ -f "$KW/common/Makefile" ]; then
